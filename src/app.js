@@ -2,7 +2,6 @@ const express = require('express');
 const session = require('express-session');
 const SQLiteStore = require('connect-sqlite3')(session);
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { loadConfig } = require('./config');
 const { passport } = require('./routes/oauth');
@@ -11,6 +10,11 @@ const errorHandler = require('./middleware/errorHandler');
 
 const config = loadConfig();
 const app = express();
+
+// Trust proxy for correct client IP detection behind reverse proxy / NAT
+if (config.trustProxy) {
+  app.set('trust proxy', config.trustProxy);
+}
 
 // Security middleware
 app.use(helmet({
@@ -56,19 +60,24 @@ app.use(session(sessionConfig));
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Rate limiting for admin routes
-const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per window
-  message: { error: 'Too many requests, please try again later.' },
-});
-
-// Apply rate limiter to admin routes
-app.use('/admin', adminLimiter);
-
-// Static files
+// Static files (served BEFORE rate limiters so assets and fonts are never throttled)
 app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
 app.use('/', express.static(path.join(__dirname, '../public/captive-portal')));
+
+// Rate Limiting Middlewares
+const { authLimiter, guestLimiter, apiLimiter } = require('./middleware/rateLimiter');
+
+// Protect authentication endpoints from brute force
+app.post('/auth/login', authLimiter);
+app.post('/admin/login', authLimiter);
+app.post('/auth/local', authLimiter);
+
+// Protect guest connect from connection spam
+app.post('/api/guest/connect', guestLimiter);
+
+// Protect API endpoints with generous limits (skips authenticated admins)
+app.use('/admin/api', apiLimiter);
+app.use('/api', apiLimiter);
 
 // Routes
 app.use('/', require('./routes'));

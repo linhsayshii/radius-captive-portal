@@ -3,7 +3,7 @@ const { disconnectSession } = require('./radiusClient');
 const logger = require('../utils/logger');
 
 const ACTIVITY_THRESHOLD = 1024; // bytes
-const IDLE_CHECK_INTERVAL = 60 * 1000; // 1 minute
+const IDLE_CHECK_INTERVAL = 30 * 1000; // 30 seconds
 
 let idleCheckTimer = null;
 
@@ -26,6 +26,9 @@ function stopIdleChecker() {
 
 function checkIdleSessions() {
   try {
+    // Purge expired MAC authorizations from SQLite
+    macAuthorizations.deleteExpired.run();
+
     const activeSessions = sessions.getActive.all();
 
     for (const session of activeSessions) {
@@ -54,8 +57,9 @@ function checkIdleSessions() {
       if (session.mac_address) {
         const auth = macAuthorizations.get.get(session.mac_address);
         if (auth && new Date(auth.expires_at).getTime() <= Date.now()) {
-          logger.info(`Session ${session.session_id} expired by MAC authorization time`);
-          terminateSession(session, 'mac_auth_expired');
+          const reason = auth.access_type === 'oauth_grace' ? 'oauth_grace_expired' : 'mac_auth_expired';
+          logger.info(`Session ${session.session_id} expired by MAC authorization time (${reason})`);
+          terminateSession(session, reason);
           continue;
         }
       }

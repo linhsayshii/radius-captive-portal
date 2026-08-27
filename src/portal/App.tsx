@@ -210,6 +210,7 @@ function NoticeAlert({ notice }: { notice: Notice | null }) {
 function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () => void }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   async function submitLocalLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -254,12 +255,41 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
     }
   }
 
-  function continueWithGoogle() {
+  async function continueWithGoogle() {
+    setIsGoogleLoading(true);
+    setNotice(null);
+
     const params = new URLSearchParams();
     if (context.mac) params.set("mac", context.mac);
     if (context.routerUrl) params.set("router_url", context.routerUrl);
     if (context.destination) params.set("dst", context.destination);
-    window.location.assign(`/auth/google?${params.toString()}`);
+
+    const oauthTargetUrl = `/auth/google?${params.toString()}`;
+
+    // If routerUrl is present, call prepare endpoint to get 3-min grace period and trigger router login first
+    if (context.mac && context.routerUrl) {
+      try {
+        const response = await fetch("/auth/google/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mac: context.mac,
+            router_url: context.routerUrl,
+            dst: context.destination,
+          }),
+        });
+
+        if (response.ok) {
+          const fullOAuthUrl = new URL(oauthTargetUrl, window.location.origin).toString();
+          postLoginToRouter({ ...context, destination: fullOAuthUrl });
+          return;
+        }
+      } catch (err) {
+        console.warn("Failed to prepare OAuth grace period, falling back to direct navigation:", err);
+      }
+    }
+
+    window.location.assign(oauthTargetUrl);
   }
 
   return (
@@ -279,8 +309,15 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <NoticeAlert notice={notice} />
-        <Button variant="outline" size="lg" className="h-11 w-full" onClick={continueWithGoogle}>
-          Đăng nhập với Google
+        <Button
+          variant="outline"
+          size="lg"
+          className="h-11 w-full"
+          disabled={isGoogleLoading || isSubmitting}
+          onClick={continueWithGoogle}
+        >
+          {isGoogleLoading ? <Spinner data-icon="inline-start" /> : null}
+          {isGoogleLoading ? "Đang chuẩn bị kết nối..." : "Đăng nhập với Google"}
         </Button>
         <form onSubmit={submitLocalLogin} noValidate>
           <FieldGroup>

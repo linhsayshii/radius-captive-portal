@@ -199,9 +199,18 @@ function getAuthorizedMac(mac) {
   return entry;
 }
 
+function revokeMac(mac) {
+  const normalized = normalizeMac(mac);
+  if (!normalized) return false;
+  macWhitelist.delete(normalized);
+  const res = macAuthorizations.delete.run(normalized);
+  return res.changes > 0;
+}
+
 // Export the router itself so Express can mount it, plus helpers for RADIUS.
 module.exports = router;
 module.exports.macWhitelist = macWhitelist;
 module.exports.normalizeMac = normalizeMac;
 module.exports.authorizeMac = authorizeMac;
 module.exports.getAuthorizedMac = getAuthorizedMac;
+module.exports.revokeMac = revokeMac;

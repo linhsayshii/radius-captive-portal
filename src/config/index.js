@@ -25,6 +25,12 @@ function loadConfig() {
     webdavUsername: process.env.WEBDAV_USERNAME || '',
     webdavPassword: process.env.WEBDAV_PASSWORD || '',
     backupRetention: parseInt(process.env.BACKUP_RETENTION || '10', 10),
+    // Rate Limiting & Proxy
+    trustProxy: process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY) : 1,
+    rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10),
+    rateLimitApiMax: parseInt(process.env.RATE_LIMIT_API_MAX || '1200', 10),
+    rateLimitAuthMax: parseInt(process.env.RATE_LIMIT_AUTH_MAX || '20', 10),
+    rateLimitGuestMax: parseInt(process.env.RATE_LIMIT_GUEST_MAX || '60', 10),
   };
 }
 
