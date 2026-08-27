@@ -15,8 +15,7 @@ if (!fs.existsSync(dbDir)) {
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
-// Lightweight forward migration so existing installations retain MAC grants
-// across application restarts without requiring a destructive database reset.
+// Lightweight forward migrations
 db.exec(`
   CREATE TABLE IF NOT EXISTS mac_authorizations (
     mac_address TEXT PRIMARY KEY,
@@ -31,19 +30,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_mac_authorizations_expiry ON mac_authorizations(expires_at);
 `);
 
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN package_id INTEGER REFERENCES packages(id);`);
+} catch (_) {}
+
 // User queries
 const userQueries = {
-  getById: db.prepare('SELECT * FROM users WHERE id = ?'),
-  getByIdentifier: db.prepare('SELECT * FROM users WHERE identifier = ?'),
-  getByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-  getAll: db.prepare('SELECT * FROM users ORDER BY created_at DESC'),
+  getById: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.id = ?'),
+  getByIdentifier: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.identifier = ?'),
+  getByEmail: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.email = ?'),
+  getAll: db.prepare(`
+    SELECT u.*, p.name as package_name, p.bandwidth_down_kbps, p.bandwidth_up_kbps, p.duration_minutes
+    FROM users u LEFT JOIN packages p ON u.package_id = p.id
+    ORDER BY u.created_at DESC
+  `),
   create: db.prepare(`
-    INSERT INTO users (type, identifier, email, password_hash, display_name, max_devices)
-    VALUES (@type, @identifier, @email, @password_hash, @display_name, @max_devices)
+    INSERT INTO users (type, identifier, email, password_hash, display_name, max_devices, package_id)
+    VALUES (@type, @identifier, @email, @password_hash, @display_name, @max_devices, @package_id)
   `),
   update: db.prepare(`
     UPDATE users SET email = @email, display_name = @display_name,
-    max_devices = @max_devices, is_active = @is_active
+    max_devices = @max_devices, is_active = @is_active, package_id = @package_id
     WHERE id = @id
   `),
   delete: db.prepare('DELETE FROM users WHERE id = ?'),

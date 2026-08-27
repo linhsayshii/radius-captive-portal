@@ -1,12 +1,21 @@
 const express = require('express');
 const { sessions, db } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
-const { terminateSession } = require('../../services/sessionManager');
+const { terminateSession, getLiveMetrics } = require('../../services/sessionManager');
 
 const router = express.Router();
 
 router.get('/', requireApiAuth, (req, res) => {
-  const activeSessions = sessions.getActive.all();
+  const activeSessions = sessions.getActive.all().map(s => {
+    const live = s.session_id ? getLiveMetrics(s.session_id) : { rateDownKbps: 0, rateUpKbps: 0 };
+    return {
+      ...s,
+      live_down_kbps: live.rateDownKbps,
+      live_up_kbps: live.rateUpKbps,
+      total_bytes_in: live.totalInputBytes || 0,
+      total_bytes_out: live.totalOutputBytes || 0,
+    };
+  });
   res.json(activeSessions);
 });
 

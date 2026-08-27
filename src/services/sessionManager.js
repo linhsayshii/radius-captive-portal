@@ -99,6 +99,8 @@ async function terminateSession(session, reason) {
     devices.setOffline.run(session.mac_address);
   }
 
+  removeLiveMetric(session.session_id);
+
   // Send RADIUS Disconnect-Request to NAS
   const nasIp = session.nas_identifier || session.ip_address;
   if (nasIp && nasIp !== '0.0.0.0') {
@@ -146,15 +148,51 @@ async function handleNewConnection(userId, macAddress, nasIp) {
   }
 }
 
+// In-memory store for live session metrics
+const liveMetrics = new Map();
+
 function updateSessionActivity(sessionId, inputOctets, outputOctets) {
   const session = sessions.getBySessionId.get(sessionId);
   if (!session) return;
 
+  const now = Date.now();
   const currentTotalBytes = inputOctets + outputOctets;
-  const lastTotalBytes = (session.last_bytes || 0);
-  const trafficDelta = currentTotalBytes - lastTotalBytes;
+  let metric = liveMetrics.get(sessionId);
 
-  if (trafficDelta > ACTIVITY_THRESHOLD) {
+  let rateDownKbps = 0;
+  let rateUpKbps = 0;
+
+  if (metric) {
+    const elapsedSec = Math.max(1, (now - metric.lastTimestamp) / 1000);
+    const inDelta = Math.max(0, inputOctets - metric.lastInputOctets);
+    const outDelta = Math.max(0, outputOctets - metric.lastOutputOctets);
+
+    rateDownKbps = Math.round((inDelta * 8) / (elapsedSec * 1024));
+    rateUpKbps = Math.round((outDelta * 8) / (elapsedSec * 1024));
+
+    metric.lastInputOctets = inputOctets;
+    metric.lastOutputOctets = outputOctets;
+    metric.lastTimestamp = now;
+    metric.rateDownKbps = rateDownKbps;
+    metric.rateUpKbps = rateUpKbps;
+    metric.totalInputBytes = inputOctets;
+    metric.totalOutputBytes = outputOctets;
+  } else {
+    metric = {
+      lastInputOctets: inputOctets,
+      lastOutputOctets: outputOctets,
+      lastTimestamp: now,
+      rateDownKbps: 0,
+      rateUpKbps: 0,
+      totalInputBytes: inputOctets,
+      totalOutputBytes: outputOctets,
+    };
+    liveMetrics.set(sessionId, metric);
+  }
+
+  const isTransmitting = rateDownKbps > 0 || rateUpKbps > 0 || (currentTotalBytes > (session.last_bytes || 0) + ACTIVITY_THRESHOLD);
+
+  if (isTransmitting) {
     // User is active - reset idle counter
     sessions.update.run({
       ...session,
@@ -171,6 +209,52 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
   }
 }
 
+function getLiveMetrics(sessionId) {
+  const metric = liveMetrics.get(sessionId);
+  if (!metric) {
+    return { rateDownKbps: 0, rateUpKbps: 0, totalInputBytes: 0, totalOutputBytes: 0 };
+  }
+  const isStale = (Date.now() - metric.lastTimestamp) > 120000;
+  return {
+    rateDownKbps: isStale ? 0 : metric.rateDownKbps,
+    rateUpKbps: isStale ? 0 : metric.rateUpKbps,
+    totalInputBytes: metric.totalInputBytes,
+    totalOutputBytes: metric.totalOutputBytes,
+  };
+}
+
+function getTotalLiveBandwidth() {
+  const activeSessions = sessions.getActive.all();
+  let totalDownKbps = 0;
+  let totalUpKbps = 0;
+
+  for (const s of activeSessions) {
+    if (s.session_id) {
+      const metric = getLiveMetrics(s.session_id);
+      totalDownKbps += metric.rateDownKbps;
+      totalUpKbps += metric.rateUpKbps;
+    }
+  }
+
+  const totalDownMbps = Number((totalDownKbps / 1024).toFixed(2));
+  const totalUpMbps = Number((totalUpKbps / 1024).toFixed(2));
+  const totalBandwidthMbps = Number(((totalDownKbps + totalUpKbps) / 1024).toFixed(2));
+
+  return {
+    totalDownKbps,
+    totalUpKbps,
+    totalDownMbps,
+    totalUpMbps,
+    totalBandwidthMbps,
+  };
+}
+
+function removeLiveMetric(sessionId) {
+  if (sessionId) {
+    liveMetrics.delete(sessionId);
+  }
+}
+
 module.exports = {
   startIdleChecker,
   stopIdleChecker,
@@ -178,5 +262,8 @@ module.exports = {
   updateSessionActivity,
   terminateSession,
   checkIdleSessions,
+  getLiveMetrics,
+  getTotalLiveBandwidth,
+  removeLiveMetric,
 };
 

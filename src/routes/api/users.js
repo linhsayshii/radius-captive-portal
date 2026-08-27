@@ -13,7 +13,7 @@ router.get('/', requireApiAuth, (req, res) => {
 
 // Create local user
 router.post('/', requireApiAuth, async (req, res) => {
-  const { username, password, email, max_devices } = req.body;
+  const { username, password, email, max_devices, package_id } = req.body;
 
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password required' });
@@ -28,6 +28,7 @@ router.post('/', requireApiAuth, async (req, res) => {
     password_hash: passwordHash,
     display_name: username,
     max_devices: max_devices || 3,
+    package_id: package_id ? parseInt(package_id) : null,
   });
 
   res.json({ id: result.lastInsertRowid, username });
@@ -40,14 +41,15 @@ router.put('/:id', requireApiAuth, (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  const { email, max_devices, is_active } = req.body;
+  const { email, max_devices, is_active, package_id } = req.body;
 
   users.update.run({
     id: req.params.id,
-    email: email || user.email,
+    email: email !== undefined ? email : user.email,
     display_name: user.display_name,
     max_devices: max_devices !== undefined ? max_devices : user.max_devices,
     is_active: is_active !== undefined ? (is_active ? 1 : 0) : user.is_active,
+    package_id: package_id !== undefined ? (package_id ? parseInt(package_id) : null) : user.package_id,
   });
 
   res.json({ success: true });

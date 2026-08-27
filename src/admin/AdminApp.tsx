@@ -25,6 +25,9 @@ import {
   CheckIcon,
   TerminalIcon,
   BookOpenIcon,
+  PencilIcon,
+  PlusIcon,
+  ActivityIcon,
 } from "lucide-react";
 
 import { ApiError, apiRequest } from "./api";
@@ -87,13 +90,26 @@ import { toast, Toaster } from "@/components/ui/toast";
 type View = "overview" | "sessions" | "devices" | "access" | "accounts" | "packages" | "backup" | "settings";
 
 type Admin = { id: number; username: string; lastLogin: string | null };
-type Stats = { users: number; activeSessions: number; todayData: number; bandwidth: number };
+type Stats = {
+  users: number;
+  activeSessions: number;
+  todayData: number;
+  bandwidth: number;
+  bandwidthDown?: number;
+  bandwidthUp?: number;
+  bandwidthDownKbps?: number;
+  bandwidthUpKbps?: number;
+};
 type Session = {
   id: number;
   username: string;
   mac_address: string;
   start_time: string | null;
   quota_used_mb: number | null;
+  live_down_kbps?: number;
+  live_up_kbps?: number;
+  total_bytes_in?: number;
+  total_bytes_out?: number;
 };
 type Device = {
   mac_address: string;
@@ -106,13 +122,15 @@ type PortalUser = {
   identifier: string;
   type: string;
   max_devices: number;
+  package_id?: number | null;
+  package_name?: string | null;
   is_active: number | boolean;
 };
 type Package = {
   id: number;
   name: string;
   duration_minutes: number;
-  quota_mb: number | null;
+  quota_mb?: number | null;
   bandwidth_down_kbps: number;
   bandwidth_up_kbps: number;
   max_devices: number;
@@ -247,6 +265,38 @@ function isActive(value: number | boolean) {
   return value === true || value === 1;
 }
 
+function formatSpeed(kbps: number | null | undefined) {
+  if (!kbps || kbps <= 0) return "0 Kbps";
+  if (kbps >= 1000) {
+    return `${(kbps / 1000).toFixed(1)} Mbps`;
+  }
+  return `${Math.round(kbps)} Kbps`;
+}
+
+function LiveSpeedBadge({ downKbps, upKbps }: { downKbps?: number; upKbps?: number }) {
+  const down = downKbps || 0;
+  const up = upKbps || 0;
+  const isTransmitting = down > 0 || up > 0;
+
+  return (
+    <div className="flex items-center gap-1.5 font-mono text-xs">
+      <span
+        className={`inline-block size-2 rounded-full transition-colors ${
+          isTransmitting ? "bg-emerald-500 animate-pulse" : "bg-zinc-300 dark:bg-zinc-600"
+        }`}
+        title={isTransmitting ? "Đang truyền tải dữ liệu" : "Đang nghỉ"}
+      />
+      <span className={down > 0 ? "font-semibold text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
+        ↓ {formatSpeed(down)}
+      </span>
+      <span className="text-muted-foreground">/</span>
+      <span className={up > 0 ? "font-semibold text-sky-600 dark:text-sky-400" : "text-muted-foreground"}>
+        ↑ {formatSpeed(up)}
+      </span>
+    </div>
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -357,6 +407,9 @@ function AdminApp() {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [isActionRunning, setIsActionRunning] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createPackageDialogOpen, setCreatePackageDialogOpen] = useState(false);
+  const [editingPackage, setEditingPackage] = useState<Package | null>(null);
+  const [editingUser, setEditingUser] = useState<PortalUser | null>(null);
   const [googleDialogUser, setGoogleDialogUser] = useState<PortalUser | null>(null);
   const [googleAuthorizations, setGoogleAuthorizations] = useState<OAuthAuthorization[]>([]);
   const [googleEmail, setGoogleEmail] = useState("");
@@ -441,11 +494,13 @@ function AdminApp() {
     void initialize();
   }, [loadData]);
 
+  // Live polling: 5 seconds for Overview & Sessions, 30 seconds for others
   useEffect(() => {
     if (!admin) return undefined;
-    const interval = window.setInterval(() => void loadData(), 30000);
+    const pollInterval = (view === "overview" || view === "sessions") ? 5000 : 30000;
+    const interval = window.setInterval(() => void loadData(), pollInterval);
     return () => window.clearInterval(interval);
-  }, [admin, loadData]);
+  }, [admin, loadData, view]);
 
   // Load settings when entering settings view
   useEffect(() => {
@@ -596,6 +651,86 @@ function AdminApp() {
     }
   }
 
+  async function handleCreatePackage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await apiRequest<{ id: number }>("/api/packages", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.get("name"),
+          duration_minutes: Number(form.get("duration_minutes")),
+          quota_mb: null,
+          bandwidth_down_kbps: Number(form.get("bandwidth_down_kbps")) || 5000,
+          bandwidth_up_kbps: Number(form.get("bandwidth_up_kbps")) || 2000,
+          max_devices: Number(form.get("max_devices")) || 1,
+        }),
+      });
+      setCreatePackageDialogOpen(false);
+      await loadData(true);
+      toast.add({ title: "Đã tạo gói cước mới", type: "success" });
+    } catch (caughtError) {
+      toast.add({
+        title: "Không thể tạo gói cước",
+        description: caughtError instanceof Error ? caughtError.message : "Vui lòng thử lại.",
+        type: "error",
+      });
+    }
+  }
+
+  async function handleUpdatePackage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingPackage) return;
+    const form = new FormData(event.currentTarget);
+    try {
+      await apiRequest<{ message: string }>(`/api/packages/${editingPackage.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: form.get("name"),
+          duration_minutes: Number(form.get("duration_minutes")),
+          quota_mb: null,
+          bandwidth_down_kbps: Number(form.get("bandwidth_down_kbps")) || 5000,
+          bandwidth_up_kbps: Number(form.get("bandwidth_up_kbps")) || 2000,
+          max_devices: Number(form.get("max_devices")) || 1,
+        }),
+      });
+      setEditingPackage(null);
+      await loadData(true);
+      toast.add({ title: "Đã cập nhật gói cước", type: "success" });
+    } catch (caughtError) {
+      toast.add({
+        title: "Không thể cập nhật gói cước",
+        description: caughtError instanceof Error ? caughtError.message : "Vui lòng thử lại.",
+        type: "error",
+      });
+    }
+  }
+
+  async function handleUpdateUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingUser) return;
+    const form = new FormData(event.currentTarget);
+    const pkgId = form.get("package_id");
+    try {
+      await apiRequest<{ success: boolean }>(`/api/users/${editingUser.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          max_devices: Number(form.get("max_devices")) || 3,
+          package_id: pkgId && pkgId !== "" ? Number(pkgId) : null,
+        }),
+      });
+      setEditingUser(null);
+      await loadData(true);
+      toast.add({ title: "Đã cập nhật tài khoản", type: "success" });
+    } catch (caughtError) {
+      toast.add({
+        title: "Không thể cập nhật tài khoản",
+        description: caughtError instanceof Error ? caughtError.message : "Vui lòng thử lại.",
+        type: "error",
+      });
+    }
+  }
+
   const currentView = viewCopy[view];
 
   return (
@@ -632,12 +767,16 @@ function AdminApp() {
             })} /> : null}
             {view === "accounts" ? <AccountsView
               users={data.users}
+              packages={data.packages}
               isLoading={isLoading}
               createDialogOpen={createDialogOpen}
               setCreateDialogOpen={setCreateDialogOpen}
+              editingUser={editingUser}
+              setEditingUser={setEditingUser}
               onCreate={async (event) => {
                 event.preventDefault();
                 const form = new FormData(event.currentTarget);
+                const pkgId = form.get("package_id");
                 try {
                   await apiRequest<{ id: number }>("/api/users", {
                     method: "POST",
@@ -645,6 +784,7 @@ function AdminApp() {
                       username: form.get("username"),
                       password: form.get("password"),
                       max_devices: Number(form.get("max_devices")),
+                      package_id: pkgId && pkgId !== "" ? Number(pkgId) : null,
                     }),
                   });
                   setCreateDialogOpen(false);
@@ -658,6 +798,7 @@ function AdminApp() {
                   });
                 }
               }}
+              onUpdate={handleUpdateUser}
               onOpenGoogle={(user) => void openGoogleDialog(user)}
               onToggle={(user) => queueAction(
                 isActive(user.is_active) ? "Khóa tài khoản?" : "Mở khóa tài khoản?",
@@ -677,7 +818,21 @@ function AdminApp() {
                 toast.add({ title: "Đã xóa tài khoản", type: "success" });
               })}
             /> : null}
-            {view === "packages" ? <PackagesView packages={data.packages} isLoading={isLoading} /> : null}
+            {view === "packages" ? <PackagesView
+              packages={data.packages}
+              isLoading={isLoading}
+              createDialogOpen={createPackageDialogOpen}
+              setCreateDialogOpen={setCreatePackageDialogOpen}
+              editingPackage={editingPackage}
+              setEditingPackage={setEditingPackage}
+              onCreate={handleCreatePackage}
+              onUpdate={handleUpdatePackage}
+              onDelete={(pkg) => queueAction("Xóa gói cước?", `Gói cước "${pkg.name}" sẽ bị xóa vĩnh viễn khỏi danh sách.`, async () => {
+                await apiRequest<{ message: string }>(`/api/packages/${pkg.id}`, { method: "DELETE" });
+                await loadData(true);
+                toast.add({ title: "Đã xóa gói cước", type: "success" });
+              })}
+            /> : null}
             {view === "backup" ? <BackupView isBackingUp={isBackingUp} message={backupMessage} onCreate={() => void createBackup()} /> : null}
             {view === "settings" ? <SettingsView
               config={settingsConfig}
@@ -758,15 +913,89 @@ function LoadError({ message }: { message: string }) {
 
 function Overview({ data, isLoading, sessions, onSelectSessions }: { data: DataState; isLoading: boolean; sessions: Session[]; onSelectSessions: () => void }) {
   if (isLoading) return <LoadingCards />;
-  return <div className="flex flex-col gap-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Tài khoản" value={data.stats.users} description="Tổng số tài khoản portal" icon={UsersIcon} /><StatCard label="Đang trực tuyến" value={data.stats.activeSessions} description="Phiên RADIUS đang hoạt động" icon={WifiIcon} /><StatCard label="Dữ liệu hôm nay" value={formatBytes(data.stats.todayData)} description="Lưu lượng từ phiên hiện tại" icon={GaugeIcon} /><StatCard label="Băng thông ước tính" value={`${data.stats.bandwidth} Mbps`} description="Theo số phiên đang hoạt động" icon={NetworkIcon} /></div><Card><CardHeader className="flex-row items-start justify-between gap-4"><div className="flex flex-col gap-1.5"><CardTitle>Phiên hoạt động gần đây</CardTitle><CardDescription>Những kết nối đang được RADIUS giữ hoạt động.</CardDescription></div><Button variant="outline" size="sm" onClick={onSelectSessions}>Xem tất cả</Button></CardHeader><CardContent>{sessions.length ? <SessionTable sessions={sessions} /> : <NoRecords title="Chưa có phiên hoạt động" description="Phiên mới sẽ xuất hiện tại đây khi người dùng truy cập mạng." />}</CardContent></Card></div>;
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Tài khoản" value={data.stats.users} description="Tổng số tài khoản portal" icon={UsersIcon} />
+        <StatCard label="Đang trực tuyến" value={data.stats.activeSessions} description="Phiên RADIUS đang hoạt động" icon={WifiIcon} />
+        <StatCard label="Dữ liệu hôm nay" value={formatBytes(data.stats.todayData)} description="Tổng lưu lượng phiên hôm nay" icon={GaugeIcon} />
+        <StatCard
+          label="Băng thông"
+          value={data.stats.bandwidth > 0 ? `${data.stats.bandwidth} Mbps` : `${data.stats.bandwidthDownKbps || 0} Kbps`}
+          description={`↓ ${(data.stats.bandwidthDown ?? 0).toFixed(1)} Mbps · ↑ ${(data.stats.bandwidthUp ?? 0).toFixed(1)} Mbps`}
+          icon={ActivityIcon}
+        />
+      </div>
+      <Card>
+        <CardHeader className="flex-row items-start justify-between gap-4">
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>Phiên hoạt động gần đây</CardTitle>
+            <CardDescription>Những kết nối đang được RADIUS duy trì theo thời gian thực.</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={onSelectSessions}>Xem tất cả</Button>
+        </CardHeader>
+        <CardContent>
+          {sessions.length ? <SessionTable sessions={sessions} /> : <NoRecords title="Chưa có phiên hoạt động" description="Phiên mới sẽ xuất hiện tại đây khi người dùng truy cập mạng." />}
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function SessionTable({ sessions, onTerminate }: { sessions: Session[]; onTerminate?: (session: Session) => void }) {
-  return <Table><TableCaption className="sr-only">Danh sách phiên kết nối đang hoạt động.</TableCaption><TableHeader><TableRow><TableHead>Người dùng</TableHead><TableHead>MAC</TableHead><TableHead>Bắt đầu</TableHead><TableHead>Thời lượng</TableHead><TableHead>Dữ liệu</TableHead>{onTerminate ? <TableHead>Thao tác</TableHead> : null}</TableRow></TableHeader><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell className="font-medium">{session.username}</TableCell><TableCell className="font-mono text-xs">{session.mac_address}</TableCell><TableCell>{formatDate(session.start_time)}</TableCell><TableCell>{formatElapsed(session.start_time)}</TableCell><TableCell>{formatBytes((session.quota_used_mb || 0) * 1024 * 1024)}</TableCell>{onTerminate ? <TableCell><Button variant="destructive" size="sm" onClick={() => onTerminate(session)}>Ngắt phiên</Button></TableCell> : null}</TableRow>)}</TableBody></Table>;
+  return (
+    <Table>
+      <TableCaption className="sr-only">Danh sách phiên kết nối đang hoạt động.</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Người dùng</TableHead>
+          <TableHead>MAC</TableHead>
+          <TableHead>Tốc độ</TableHead>
+          <TableHead>Bắt đầu</TableHead>
+          <TableHead>Thời lượng</TableHead>
+          <TableHead>Dữ liệu</TableHead>
+          {onTerminate ? <TableHead>Thao tác</TableHead> : null}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sessions.map((session) => (
+          <TableRow key={session.id}>
+            <TableCell className="font-medium">{session.username}</TableCell>
+            <TableCell className="font-mono text-xs">{session.mac_address}</TableCell>
+            <TableCell>
+              <LiveSpeedBadge downKbps={session.live_down_kbps} upKbps={session.live_up_kbps} />
+            </TableCell>
+            <TableCell>{formatDate(session.start_time)}</TableCell>
+            <TableCell>{formatElapsed(session.start_time)}</TableCell>
+            <TableCell>{formatBytes((session.quota_used_mb || 0) * 1024 * 1024)}</TableCell>
+            {onTerminate ? (
+              <TableCell>
+                <Button variant="destructive" size="sm" onClick={() => onTerminate(session)}>Ngắt phiên</Button>
+              </TableCell>
+            ) : null}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
 }
 
 function SessionsView({ sessions, isLoading, onTerminate }: { sessions: Session[]; isLoading: boolean; onTerminate: (session: Session) => void }) {
-  return <Card><CardHeader><CardTitle>Phiên đang hoạt động</CardTitle><CardDescription>Ngắt phiên sẽ yêu cầu hệ thống kết thúc kết nối tương ứng.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : sessions.length ? <SessionTable sessions={sessions} onTerminate={onTerminate} /> : <NoRecords title="Không có phiên hoạt động" description="Không có người dùng nào đang trực tuyến." />}</CardContent></Card>;
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-1">
+            <CardTitle>Phiên đang hoạt động</CardTitle>
+            <CardDescription>Ngắt phiên sẽ gửi tín hiệu RADIUS Disconnect (RFC 5176) để router ngắt thiết bị ngay lập tức.</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? <Skeleton className="h-40 w-full" /> : sessions.length ? <SessionTable sessions={sessions} onTerminate={onTerminate} /> : <NoRecords title="Không có phiên hoạt động" description="Không có người dùng nào đang trực tuyến." />}
+      </CardContent>
+    </Card>
+  );
 }
 
 function DevicesView({ devices, isLoading, onDisconnect }: { devices: Device[]; isLoading: boolean; onDisconnect: (device: Device) => void }) {
@@ -777,14 +1006,392 @@ function AccessView({ entries, isLoading, onRevoke }: { entries: MacAuthorizatio
   return <Card><CardHeader><CardTitle>Quyền truy cập theo MAC</CardTitle><CardDescription>Quyền này tự hết hạn hoặc có thể bị thu hồi ngay tại đây.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : entries.length ? <Table><TableCaption className="sr-only">Danh sách quyền truy cập MAC.</TableCaption><TableHeader><TableRow><TableHead>MAC</TableHead><TableHead>Nguồn cấp</TableHead><TableHead>Tài khoản</TableHead><TableHead>Hết hạn</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{entries.map((entry) => <TableRow key={entry.mac}><TableCell className="font-mono text-xs">{entry.mac}</TableCell><TableCell><Badge variant="outline">{entry.access_type === "account" ? "Tài khoản" : "Truy cập nhanh"}</Badge></TableCell><TableCell>{entry.username || "Khách"}</TableCell><TableCell>{formatDate(entry.expires_at)}</TableCell><TableCell><Button variant="destructive" size="sm" onClick={() => onRevoke(entry)}>Thu hồi</Button></TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa cấp quyền MAC" description="Quyền sẽ xuất hiện sau khi khách truy cập nhanh hoặc xác thực tài khoản." />}</CardContent></Card>;
 }
 
-function AccountsView({ users, isLoading, createDialogOpen, setCreateDialogOpen, onCreate, onOpenGoogle, onToggle, onDelete }: { users: PortalUser[]; isLoading: boolean; createDialogOpen: boolean; setCreateDialogOpen: (open: boolean) => void; onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>; onOpenGoogle: (user: PortalUser) => void; onToggle: (user: PortalUser) => void; onDelete: (user: PortalUser) => void }) {
-  return <Card><CardHeader className="flex-row items-start justify-between gap-4"><div className="flex flex-col gap-1.5"><CardTitle>Tài khoản portal</CardTitle><CardDescription>Tài khoản nội bộ có thể được liên kết với email Google đã được duyệt.</CardDescription></div><Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}><DialogTrigger render={<Button />}><UserPlusIcon data-icon="inline-start" />Thêm tài khoản</DialogTrigger><DialogContent><DialogHeader><DialogTitle>Tạo tài khoản nội bộ</DialogTitle><DialogDescription>Tài khoản này có thể được dùng cho đăng nhập nội bộ hoặc liên kết Google OAuth.</DialogDescription></DialogHeader><form onSubmit={(event) => void onCreate(event)}><FieldGroup><Field><FieldLabel htmlFor="new-username">Tài khoản</FieldLabel><Input id="new-username" name="username" autoComplete="off" required /></Field><Field><FieldLabel htmlFor="new-password">Mật khẩu</FieldLabel><Input id="new-password" name="password" type="password" autoComplete="new-password" required /></Field><Field><FieldLabel htmlFor="new-max-devices">Số thiết bị tối đa</FieldLabel><Input id="new-max-devices" name="max_devices" type="number" min="1" defaultValue="3" required /></Field><DialogFooter><DialogClose render={<Button variant="outline" />}>Hủy</DialogClose><Button type="submit">Tạo tài khoản</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : users.length ? <Table><TableCaption className="sr-only">Danh sách tài khoản portal.</TableCaption><TableHeader><TableRow><TableHead>Tài khoản</TableHead><TableHead>Loại</TableHead><TableHead>Thiết bị</TableHead><TableHead>Trạng thái</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{users.map((user) => <TableRow key={user.id}><TableCell className="font-medium">{user.identifier}</TableCell><TableCell><Badge variant="outline">{user.type}</Badge></TableCell><TableCell>{user.max_devices}</TableCell><TableCell><Badge variant={isActive(user.is_active) ? "secondary" : "destructive"}>{isActive(user.is_active) ? "Hoạt động" : "Đã khóa"}</Badge></TableCell><TableCell><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => onOpenGoogle(user)}>Google OAuth</Button><Button variant="outline" size="sm" onClick={() => onToggle(user)}>{isActive(user.is_active) ? "Khóa" : "Mở khóa"}</Button><Button variant="destructive" size="sm" onClick={() => onDelete(user)}>Xóa</Button></div></TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa có tài khoản" description="Tạo một tài khoản để khách có thể đăng nhập vào portal." />}</CardContent></Card>;
+function AccountsView({
+  users,
+  packages,
+  isLoading,
+  createDialogOpen,
+  setCreateDialogOpen,
+  editingUser,
+  setEditingUser,
+  onCreate,
+  onUpdate,
+  onOpenGoogle,
+  onToggle,
+  onDelete,
+}: {
+  users: PortalUser[];
+  packages: Package[];
+  isLoading: boolean;
+  createDialogOpen: boolean;
+  setCreateDialogOpen: (open: boolean) => void;
+  editingUser: PortalUser | null;
+  setEditingUser: (user: PortalUser | null) => void;
+  onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onUpdate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onOpenGoogle: (user: PortalUser) => void;
+  onToggle: (user: PortalUser) => void;
+  onDelete: (user: PortalUser) => void;
+}) {
+  const [assignPackage, setAssignPackage] = useState(false);
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <CardTitle>Tài khoản portal</CardTitle>
+          <CardDescription>Quản lý tài khoản người dùng và gán gói cước băng thông tương ứng.</CardDescription>
+        </div>
+        <Dialog open={createDialogOpen} onOpenChange={(open) => { setCreateDialogOpen(open); if (!open) setAssignPackage(false); }}>
+          <DialogTrigger render={<Button />}><UserPlusIcon data-icon="inline-start" />Thêm tài khoản</DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Tạo tài khoản nội bộ</DialogTitle>
+              <DialogDescription>Tài khoản này có thể được dùng cho đăng nhập nội bộ hoặc liên kết Google OAuth.</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={(event) => void onCreate(event)}>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="new-username">Tài khoản</FieldLabel>
+                  <Input id="new-username" name="username" autoComplete="off" required />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="new-password">Mật khẩu</FieldLabel>
+                  <Input id="new-password" name="password" type="password" autoComplete="new-password" required />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="new-max-devices">Số thiết bị tối đa</FieldLabel>
+                  <Input id="new-max-devices" name="max_devices" type="number" min="1" defaultValue="3" required />
+                </Field>
+
+                {/* Checkbox và Dropdown chọn gói cước */}
+                <Field>
+                  <div className="flex items-center gap-2 pt-1 pb-2">
+                    <input
+                      type="checkbox"
+                      id="assign-pkg-check"
+                      checked={assignPackage}
+                      onChange={(e) => setAssignPackage(e.target.checked)}
+                      className="size-4 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                    />
+                    <label htmlFor="assign-pkg-check" className="text-sm font-medium cursor-pointer select-none">
+                      Áp dụng gói cước cho tài khoản này
+                    </label>
+                  </div>
+                  {assignPackage && (
+                    <div className="space-y-1.5 pl-6">
+                      <FieldLabel htmlFor="new-pkg-select">Chọn gói cước</FieldLabel>
+                      <select
+                        id="new-pkg-select"
+                        name="package_id"
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        <option value="">-- Chọn gói cước --</option>
+                        {packages.map((pkg) => (
+                          <option key={pkg.id} value={pkg.id}>
+                            {pkg.name} ({formatMinutes(pkg.duration_minutes)} · ↓{formatSpeed(pkg.bandwidth_down_kbps)} / ↑{formatSpeed(pkg.bandwidth_up_kbps)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </Field>
+
+                <DialogFooter>
+                  <DialogClose render={<Button variant="outline" />}>Hủy</DialogClose>
+                  <Button type="submit">Tạo tài khoản</Button>
+                </DialogFooter>
+              </FieldGroup>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-40 w-full" />
+        ) : users.length ? (
+          <Table>
+            <TableCaption className="sr-only">Danh sách tài khoản portal.</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Tài khoản</TableHead>
+                <TableHead>Loại</TableHead>
+                <TableHead>Gói cước</TableHead>
+                <TableHead>Thiết bị</TableHead>
+                <TableHead>Trạng thái</TableHead>
+                <TableHead>Thao tác</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((user) => (
+                <TableRow key={user.id}>
+                  <TableCell className="font-medium">{user.identifier}</TableCell>
+                  <TableCell><Badge variant="outline">{user.type}</Badge></TableCell>
+                  <TableCell>
+                    <Badge variant={user.package_name ? "secondary" : "outline"}>
+                      {user.package_name || "Mặc định"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>{user.max_devices}</TableCell>
+                  <TableCell>
+                    <Badge variant={isActive(user.is_active) ? "secondary" : "destructive"}>
+                      {isActive(user.is_active) ? "Hoạt động" : "Đã khóa"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setEditingUser(user)}>
+                        <PencilIcon data-icon="inline-start" />
+                        Sửa
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => onOpenGoogle(user)}>Google</Button>
+                      <Button variant="outline" size="sm" onClick={() => onToggle(user)}>
+                        {isActive(user.is_active) ? "Khóa" : "Mở khóa"}
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={() => onDelete(user)}>Xóa</Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <NoRecords title="Chưa có tài khoản" description="Tạo một tài khoản để khách có thể đăng nhập vào portal." />
+        )}
+      </CardContent>
+
+      {/* Dialog Sửa tài khoản & Đổi gói cước */}
+      <Dialog open={Boolean(editingUser)} onOpenChange={(open) => { if (!open) setEditingUser(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Chỉnh sửa tài khoản</DialogTitle>
+            <DialogDescription>Cập nhật số thiết bị và gói cước cho tài khoản &quot;{editingUser?.identifier}&quot;.</DialogDescription>
+          </DialogHeader>
+          {editingUser && (
+            <form onSubmit={(event) => void onUpdate(event)}>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="edit-user-devices">Số thiết bị tối đa</FieldLabel>
+                  <Input id="edit-user-devices" name="max_devices" type="number" min="1" defaultValue={editingUser.max_devices} required />
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="edit-user-pkg">Gói cước áp dụng</FieldLabel>
+                  <select
+                    id="edit-user-pkg"
+                    name="package_id"
+                    defaultValue={editingUser.package_id || ""}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">-- Mặc định hệ thống (Không gắn gói) --</option>
+                    {packages.map((pkg) => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {pkg.name} ({formatMinutes(pkg.duration_minutes)} · ↓{formatSpeed(pkg.bandwidth_down_kbps)} / ↑{formatSpeed(pkg.bandwidth_up_kbps)})
+                      </option>
+                    ))}
+                  </select>
+                  <FieldDescription>Router sẽ nhận giới hạn tốc độ và thời lượng theo gói này khi user đăng nhập.</FieldDescription>
+                </Field>
+
+                <DialogFooter>
+                  <DialogClose render={<Button variant="outline" />}>Hủy</DialogClose>
+                  <Button type="submit">Lưu thay đổi</Button>
+                </DialogFooter>
+              </FieldGroup>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
 }
 
-function PackagesView({ packages, isLoading }: { packages: Package[]; isLoading: boolean }) {
-  if (isLoading) return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 3 }, (_, index) => <Card key={index}><CardHeader><Skeleton className="h-5 w-32" /><Skeleton className="h-4 w-48" /></CardHeader><CardContent><Skeleton className="h-16 w-full" /></CardContent></Card>)}</div>;
-  if (!packages.length) return <Card><CardContent><NoRecords title="Chưa có gói cước" description="Tạo gói cước qua API để hiển thị tại đây." /></CardContent></Card>;
-  return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{packages.map((pkg) => <Card key={pkg.id}><CardHeader><div className="flex items-start justify-between gap-3"><div className="flex flex-col gap-1"><CardTitle>{pkg.name}</CardTitle><CardDescription>{formatMinutes(pkg.duration_minutes)}</CardDescription></div><Badge variant="secondary">{pkg.max_devices} thiết bị</Badge></div></CardHeader><CardContent className="flex flex-col gap-3 text-sm"><div className="flex items-center justify-between gap-4"><span className="text-muted-foreground">Dung lượng</span><span>{pkg.quota_mb ? formatBytes(pkg.quota_mb * 1024 * 1024) : "Không giới hạn"}</span></div><div className="flex items-center justify-between gap-4"><span className="text-muted-foreground">Tải xuống</span><span>{pkg.bandwidth_down_kbps} Kbps</span></div><div className="flex items-center justify-between gap-4"><span className="text-muted-foreground">Tải lên</span><span>{pkg.bandwidth_up_kbps} Kbps</span></div></CardContent></Card>)}</div>;
+function PackagesView({
+  packages,
+  isLoading,
+  createDialogOpen,
+  setCreateDialogOpen,
+  editingPackage,
+  setEditingPackage,
+  onCreate,
+  onUpdate,
+  onDelete,
+}: {
+  packages: Package[];
+  isLoading: boolean;
+  createDialogOpen: boolean;
+  setCreateDialogOpen: (open: boolean) => void;
+  editingPackage: Package | null;
+  setEditingPackage: (pkg: Package | null) => void;
+  onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onUpdate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onDelete: (pkg: Package) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-medium">Gói cước WiFi & Băng thông</h2>
+          <p className="text-sm text-muted-foreground">Cấu hình thời lượng và tốc độ tải xuống/lên gửi xuống router qua RADIUS.</p>
+        </div>
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <PlusIcon data-icon="inline-start" />
+          Thêm gói cước
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 3 }, (_, index) => (
+            <Card key={index}>
+              <CardHeader><Skeleton className="h-5 w-32" /><Skeleton className="h-4 w-48" /></CardHeader>
+              <CardContent><Skeleton className="h-16 w-full" /></CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : !packages.length ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center p-8 text-center">
+            <NoRecords title="Chưa có gói cước nào" description="Tạo gói cước để thiết lập giới hạn tốc độ và thời gian cho mạng WiFi." />
+            <Button className="mt-4" onClick={() => setCreateDialogOpen(true)}>
+              <PlusIcon data-icon="inline-start" />
+              Thêm gói cước ngay
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {packages.map((pkg) => (
+            <Card key={pkg.id} className="flex flex-col justify-between">
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <CardTitle className="text-lg">{pkg.name}</CardTitle>
+                    <CardDescription>{formatMinutes(pkg.duration_minutes)}</CardDescription>
+                  </div>
+                  <Badge variant="secondary">{pkg.max_devices} thiết bị</Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 text-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Tốc độ Tải xuống (Down)</span>
+                  <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                    ↓ {formatSpeed(pkg.bandwidth_down_kbps)} ({pkg.bandwidth_down_kbps} Kbps)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Tốc độ Tải lên (Up)</span>
+                  <span className="font-mono font-medium text-sky-600 dark:text-sky-400">
+                    ↑ {formatSpeed(pkg.bandwidth_up_kbps)} ({pkg.bandwidth_up_kbps} Kbps)
+                  </span>
+                </div>
+              </CardContent>
+              <CardFooter className="flex items-center justify-end gap-2 border-t pt-4">
+                <Button variant="outline" size="sm" onClick={() => setEditingPackage(pkg)}>
+                  <PencilIcon data-icon="inline-start" />
+                  Sửa
+                </Button>
+                <Button variant="destructive" size="sm" onClick={() => onDelete(pkg)}>
+                  <Trash2Icon data-icon="inline-start" />
+                  Xóa
+                </Button>
+              </CardFooter>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Dialog Tạo gói cước mới */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Thêm gói cước mới</DialogTitle>
+            <DialogDescription>Cấu hình giới hạn thời gian và băng thông tải xuống/lên.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(event) => void onCreate(event)}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="pkg-name">Tên gói cước</FieldLabel>
+                <Input id="pkg-name" name="name" placeholder="Ví dụ: Gói 1 giờ, Gói VIP, Gói Ngày" required />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel htmlFor="pkg-duration">Thời lượng (phút)</FieldLabel>
+                  <Input id="pkg-duration" name="duration_minutes" type="number" min="1" defaultValue="60" required />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="pkg-devices">Số thiết bị</FieldLabel>
+                  <Input id="pkg-devices" name="max_devices" type="number" min="1" defaultValue="1" required />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel htmlFor="pkg-down">Tải xuống (Kbps)</FieldLabel>
+                  <Input id="pkg-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue="5000" required />
+                  <FieldDescription>5000 Kbps ≈ 5 Mbps</FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="pkg-up">Tải lên (Kbps)</FieldLabel>
+                  <Input id="pkg-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue="2000" required />
+                  <FieldDescription>2000 Kbps ≈ 2 Mbps</FieldDescription>
+                </Field>
+              </div>
+              <DialogFooter>
+                <DialogClose render={<Button variant="outline" />}>Hủy</DialogClose>
+                <Button type="submit">Tạo gói cước</Button>
+              </DialogFooter>
+            </FieldGroup>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Chỉnh sửa gói cước */}
+      <Dialog open={Boolean(editingPackage)} onOpenChange={(open) => { if (!open) setEditingPackage(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Chỉnh sửa gói cước</DialogTitle>
+            <DialogDescription>Cập nhật thông số gói cước &quot;{editingPackage?.name}&quot;.</DialogDescription>
+          </DialogHeader>
+          {editingPackage && (
+            <form onSubmit={(event) => void onUpdate(event)}>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="edit-pkg-name">Tên gói cước</FieldLabel>
+                  <Input id="edit-pkg-name" name="name" defaultValue={editingPackage.name} required />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field>
+                    <FieldLabel htmlFor="edit-pkg-duration">Thời lượng (phút)</FieldLabel>
+                    <Input id="edit-pkg-duration" name="duration_minutes" type="number" min="1" defaultValue={editingPackage.duration_minutes} required />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="edit-pkg-devices">Số thiết bị</FieldLabel>
+                    <Input id="edit-pkg-devices" name="max_devices" type="number" min="1" defaultValue={editingPackage.max_devices} required />
+                  </Field>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field>
+                    <FieldLabel htmlFor="edit-pkg-down">Tải xuống (Kbps)</FieldLabel>
+                    <Input id="edit-pkg-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue={editingPackage.bandwidth_down_kbps} required />
+                    <FieldDescription>{(editingPackage.bandwidth_down_kbps / 1000).toFixed(1)} Mbps</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="edit-pkg-up">Tải lên (Kbps)</FieldLabel>
+                    <Input id="edit-pkg-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue={editingPackage.bandwidth_up_kbps} required />
+                    <FieldDescription>{(editingPackage.bandwidth_up_kbps / 1000).toFixed(1)} Mbps</FieldDescription>
+                  </Field>
+                </div>
+                <DialogFooter>
+                  <DialogClose render={<Button variant="outline" />}>Hủy</DialogClose>
+                  <Button type="submit">Lưu thay đổi</Button>
+                </DialogFooter>
+              </FieldGroup>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
 }
 
 function BackupView({ isBackingUp, message, onCreate }: { isBackingUp: boolean; message: string; onCreate: () => void }) {

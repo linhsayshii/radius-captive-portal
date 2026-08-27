@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,
   display_name TEXT,
   max_devices INTEGER DEFAULT 3,
+  package_id INTEGER REFERENCES packages(id),
   is_active BOOLEAN DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
