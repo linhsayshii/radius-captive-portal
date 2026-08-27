@@ -1,14 +1,32 @@
 const express = require('express');
+const os = require('os');
 const { loadConfig } = require('../../config');
 
 const router = express.Router();
+
+function getPrimaryLanIp() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * GET /admin/api/settings
  * Returns current configuration status (secrets masked)
  */
-router.get('/', (_req, res) => {
+router.get('/', (req, res) => {
   const config = loadConfig();
+  const detectedLanIp = process.env.PORTAL_SERVER_IP || getPrimaryLanIp() ||
+    (req.hostname && req.hostname !== 'localhost' && req.hostname !== '127.0.0.1' ? req.hostname : '127.0.0.1');
+  const protocol = req.protocol || 'http';
+  const portSuffix = config.port === 80 || config.port === 443 ? '' : `:${config.port}`;
+  const portalUrl = `${protocol}://${detectedLanIp}${portSuffix}`;
 
   res.json({
     radius: {
@@ -16,7 +34,9 @@ router.get('/', (_req, res) => {
       authPort: config.radiusAuthPort,
       accountingPort: config.radiusAccountingPort,
       coaPort: config.radiusCoaPort,
+      serverIp: detectedLanIp,
     },
+    portalUrl,
     oauth: {
       clientIdConfigured: Boolean(config.googleClientId),
       callbackUrl: config.googleCallbackUrl,
@@ -26,114 +46,154 @@ router.get('/', (_req, res) => {
 
 /**
  * POST /admin/api/settings/test-radius
- * Test RADIUS connectivity by sending an Access-Request
+ * Performs genuine diagnostics:
+ * 1. Tests local RADIUS server health (UDP 1812)
+ * 2. Tests Router CoA / Disconnect port (UDP 3799) if routerIp is provided
  */
 router.post('/test-radius', async (req, res) => {
   const config = loadConfig();
-  const { routerIp, sharedSecret, authPort } = req.body;
+  const { routerIp, sharedSecret, coaPort, authPort } = req.body;
+  const secret = sharedSecret || config.radiusSharedSecret;
+  const targetAuthPort = parseInt(authPort, 10) || config.radiusAuthPort || 1812;
+  const targetCoaPort = parseInt(coaPort, 10) || config.radiusCoaPort || 3799;
 
-  if (!routerIp || !sharedSecret) {
+  if (!secret) {
     return res.status(400).json({
       success: false,
-      message: 'Thiếu thông tin router IP hoặc shared secret',
+      message: 'Thiếu Shared Secret để kiểm tra RADIUS',
     });
   }
 
+  const dgram = require('dgram');
+  const crypto = require('crypto');
+  const { buildRfc5176Packet, DISCONNECT_REQUEST, DISCONNECT_ACK, DISCONNECT_NACK } = require('../../services/radiusClient');
+
+  // Step 1: Test local RADIUS server (UDP 1812)
+  let localServerOk = false;
   try {
-    const dgram = require('dgram');
-    const crypto = require('crypto');
+    const localSocket = dgram.createSocket('udp4');
+    const testId = Math.floor(Math.random() * 256);
+    const reqAuth = crypto.randomBytes(16);
+    const testUser = Buffer.from('connectivity-check');
+    const attrBuf = Buffer.concat([
+      Buffer.from([1, 2 + testUser.length]),
+      testUser,
+    ]);
 
-    const socket = dgram.createSocket('udp4');
-    const testUsername = 'test-connectivity-' + Date.now();
-    const packetId = Math.floor(Math.random() * 256);
-    const requestAuth = crypto.randomBytes(16);
-
-    // Build Access-Request packet
-    const message = Buffer.from(testUsername);
-    const userPassword = Buffer.alloc(16);
-    Buffer.from('test').copy(userPassword);
-
-    // Simple password encoding for testing
-    const encodedPassword = Buffer.alloc(16);
-    for (let i = 0; i < 16; i++) {
-      const hash = crypto.createHash('md5')
-        .update(Buffer.concat([Buffer.from(sharedSecret, 'utf8'), requestAuth]))
-        .digest();
-      encodedPassword[i] = userPassword[i] ^ hash[i];
-    }
-
-    // Build packet attributes
-    const attrs = [];
-    // User-Name (1)
-    attrs.push(Buffer.from([1, 2 + message.length, ...message]));
-    // User-Password (2)
-    attrs.push(Buffer.from([2, 18, ...encodedPassword]));
-    // NAS-IP-Address (4)
-    const nasIp = Buffer.alloc(4);
-    nasIp.writeUInt32BE(0, 0); // 0.0.0.0 as we are the client
-    attrs.push(Buffer.from([4, 6, ...nasIp]));
-
-    const attrBuffer = Buffer.concat(attrs);
-
-    // Build packet header
     const header = Buffer.alloc(20);
     header.writeUInt8(1, 0); // Access-Request
-    header.writeUInt8(packetId, 1);
+    header.writeUInt8(testId, 1);
+    header.writeUInt16BE(20 + attrBuf.length, 2);
+    reqAuth.copy(header, 4);
 
-    const body = Buffer.concat([requestAuth, attrBuffer]);
-    header.writeUInt16BE(20 + attrBuffer.length, 2);
-    header.writeUInt8(0); // placeholder for auth
+    const packet = Buffer.concat([header, attrBuf]);
 
-    const packet = Buffer.concat([header, attrBuffer]);
+    localServerOk = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        try { localSocket.close(); } catch (_) {}
+        resolve(false);
+      }, 1500);
 
-    // Compute authenticator
-    const authenticator = crypto.createHash('md5')
-      .update(Buffer.concat([packet, Buffer.from(sharedSecret, 'utf8')]))
-      .digest();
-    packet.writeUInt8(0, 4);
-    authenticator.copy(packet, 4);
-
-    const targetPort = authPort || config.radiusAuthPort;
-
-    const result = await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        socket.close();
-        resolve({ success: false, message: 'Timeout - Router không phản hồi' });
-      }, 5000);
-
-      socket.on('message', (msg, _rinfo) => {
-        clearTimeout(timeout);
-        socket.close();
-        const code = msg.readUInt8(0);
-        if (code === 2) {
-          resolve({ success: true, message: 'Kết nối thành công - Router chấp nhận Access-Request' });
-        } else if (code === 3) {
-          resolve({ success: true, message: 'Kết nối thành công - Router từ chối (Access-Reject) - Điều này là bình thường khi test' });
-        } else {
-          resolve({ success: true, message: `Router phản hồi với mã: ${code}` });
-        }
+      localSocket.on('message', (msg) => {
+        clearTimeout(timer);
+        try { localSocket.close(); } catch (_) {}
+        resolve(msg.length >= 20);
       });
 
-      socket.on('error', (err) => {
-        clearTimeout(timeout);
-        socket.close();
-        resolve({ success: false, message: `Lỗi kết nối: ${err.message}` });
+      localSocket.on('error', () => {
+        clearTimeout(timer);
+        try { localSocket.close(); } catch (_) {}
+        resolve(false);
       });
 
-      socket.send(packet, targetPort, routerIp, (err) => {
+      localSocket.send(packet, targetAuthPort, '127.0.0.1', (err) => {
         if (err) {
-          clearTimeout(timeout);
-          socket.close();
-          resolve({ success: false, message: `Lỗi gửi packet: ${err.message}` });
+          clearTimeout(timer);
+          try { localSocket.close(); } catch (_) {}
+          resolve(false);
         }
       });
     });
+  } catch (err) {
+    localServerOk = false;
+  }
 
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({
+  // Step 2: If router IP is provided, test Router Incoming CoA / Disconnect (UDP 3799)
+  if (routerIp && routerIp !== '127.0.0.1' && routerIp !== 'localhost') {
+    try {
+      const coaSocket = dgram.createSocket('udp4');
+      const id = Math.floor(Math.random() * 256);
+      const { packet: coaPacket } = buildRfc5176Packet(DISCONNECT_REQUEST, id, {
+        'Acct-Session-Id': 'test-connectivity-probe',
+        'User-Name': 'test-probe',
+      });
+
+      const coaResult = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          try { coaSocket.close(); } catch (_) {}
+          resolve({
+            responded: false,
+            message: `Máy chủ RADIUS nội bộ (Port ${targetAuthPort}) hoạt động tốt. Tuy nhiên Router (${routerIp}) không phản hồi cổng CoA UDP ${targetCoaPort}. Hãy kiểm tra xem trên Router đã chạy lệnh '/radius incoming set accept=yes port=${targetCoaPort}' và mở tường lửa chưa.`,
+          });
+        }, 3000);
+
+        coaSocket.on('message', (msg) => {
+          clearTimeout(timer);
+          try { coaSocket.close(); } catch (_) {}
+          const code = msg.readUInt8(0);
+          if (code === DISCONNECT_ACK || code === DISCONNECT_NACK || code === 44 || code === 45) {
+            resolve({
+              responded: true,
+              message: `Kết nối hoàn hảo! Router (${routerIp}) đã phản hồi cổng CoA UDP ${targetCoaPort} và máy chủ RADIUS (Port ${targetAuthPort}) hoạt động bình thường.`,
+            });
+          } else {
+            resolve({
+              responded: true,
+              message: `Router (${routerIp}) đã phản hồi với mã Code: ${code}.`,
+            });
+          }
+        });
+
+        coaSocket.on('error', (err) => {
+          clearTimeout(timer);
+          try { coaSocket.close(); } catch (_) {}
+          resolve({ responded: false, message: `Lỗi kết nối UDP tới Router: ${err.message}` });
+        });
+
+        coaSocket.send(coaPacket, targetCoaPort, routerIp, (err) => {
+          if (err) {
+            clearTimeout(timer);
+            try { coaSocket.close(); } catch (_) {}
+            resolve({ responded: false, message: `Không thể gửi gói tin tới ${routerIp}:${targetCoaPort} - ${err.message}` });
+          }
+        });
+      });
+
+      return res.json({
+        success: coaResult.responded,
+        localServerRunning: localServerOk,
+        message: coaResult.message,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: `Lỗi kiểm tra router: ${err.message}`,
+      });
+    }
+  }
+
+  // If only testing local server
+  if (localServerOk) {
+    return res.json({
+      success: true,
+      localServerRunning: true,
+      message: `Máy chủ RADIUS đang lắng nghe và phản hồi tốt trên cổng UDP ${targetAuthPort}. (Nhập thêm Router IP để test cổng ngắt kết nối CoA UDP ${targetCoaPort} trên Router).`,
+    });
+  } else {
+    return res.json({
       success: false,
-      message: `Lỗi: ${error.message}`,
+      localServerRunning: false,
+      message: `Máy chủ RADIUS chưa phản hồi trên cổng UDP ${targetAuthPort}. Hãy kiểm tra xem server đã khởi động cổng RADIUS chưa.`,
     });
   }
 });

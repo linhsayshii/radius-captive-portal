@@ -74,8 +74,11 @@ const sessionQueries = {
   getBySessionId: db.prepare('SELECT * FROM sessions WHERE session_id = ?'),
   getActive: db.prepare(`
     SELECT s.*, u.type as user_type, u.display_name, u.email
-    FROM sessions s JOIN users u ON s.user_id = u.id
+    FROM sessions s LEFT JOIN users u ON s.user_id = u.id
     WHERE s.is_active = 1 ORDER BY s.start_time DESC
+  `),
+  getActiveByMac: db.prepare(`
+    SELECT * FROM sessions WHERE (mac_address = ? OR username = ?) AND is_active = 1 LIMIT 1
   `),
   create: db.prepare(`
     INSERT INTO sessions (user_id, package_id, mac_address, ip_address,

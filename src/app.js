@@ -22,14 +22,19 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Session store
-const sessionStore = new SQLiteStore({
-  db: 'sessions.db',
-  dir: path.dirname(config.databasePath),
-});
+let sessionStore;
+try {
+  const SQLiteStore = require('connect-sqlite3')(session);
+  sessionStore = new SQLiteStore({
+    db: 'sessions.db',
+    dir: path.dirname(config.databasePath),
+  });
+} catch (err) {
+  logger.warn('SQLiteStore not initialized, falling back to default session store: ' + err.message);
+}
 
 // Session configuration
-app.use(session({
-  store: sessionStore,
+const sessionConfig = {
   secret: config.sessionSecret,
   resave: false,
   saveUninitialized: false,
@@ -40,7 +45,12 @@ app.use(session({
     sameSite: 'strict',
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   },
-}));
+};
+if (sessionStore) {
+  sessionConfig.store = sessionStore;
+}
+
+app.use(session(sessionConfig));
 
 // Passport initialization
 app.use(passport.initialize());

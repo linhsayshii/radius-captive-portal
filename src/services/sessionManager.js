@@ -1,5 +1,6 @@
-const { sessions, devices, users, packages } = require('../db');
+const { sessions, devices, users, packages, macAuthorizations } = require('../db');
 const { disconnectSession } = require('./radiusClient');
+const logger = require('../utils/logger');
 
 const ACTIVITY_THRESHOLD = 1024; // bytes
 const IDLE_CHECK_INTERVAL = 60 * 1000; // 1 minute
@@ -12,46 +13,77 @@ function startIdleChecker() {
   idleCheckTimer = setInterval(() => {
     checkIdleSessions();
   }, IDLE_CHECK_INTERVAL);
+  logger.info('Session idle & expiry checker started');
 }
 
 function stopIdleChecker() {
   if (idleCheckTimer) {
     clearInterval(idleCheckTimer);
     idleCheckTimer = null;
+    logger.info('Session idle & expiry checker stopped');
   }
 }
 
 function checkIdleSessions() {
-  const activeSessions = sessions.getActive.all();
+  try {
+    const activeSessions = sessions.getActive.all();
 
-  for (const session of activeSessions) {
-    const idleSeconds = session.idle_seconds || 0;
-    const durationMinutes = Math.floor(
-      (Date.now() - new Date(session.start_time).getTime()) / 60000
-    );
+    for (const session of activeSessions) {
+      const idleSeconds = session.idle_seconds || 0;
+      const durationSeconds = Math.floor(
+        (Date.now() - new Date(session.start_time).getTime()) / 1000
+      );
 
-    // Check if session expired by duration
-    const maxDuration = (session.package?.duration_minutes || 60) * 60;
-    if (durationMinutes * 60 >= maxDuration) {
-      terminateSession(session, 'expired');
-      continue;
+      // Check package duration if linked
+      let maxDurationSeconds = 24 * 60 * 60; // 24 hours default
+      if (session.package_id) {
+        const pkg = packages.getById.get(session.package_id);
+        if (pkg?.duration_minutes) {
+          maxDurationSeconds = pkg.duration_minutes * 60;
+        }
+      }
+
+      // Check if session expired by duration
+      if (durationSeconds >= maxDurationSeconds) {
+        logger.info(`Session ${session.session_id} expired by duration limit (${durationSeconds}s / ${maxDurationSeconds}s)`);
+        terminateSession(session, 'duration_expired');
+        continue;
+      }
+
+      // Check if MAC authorization expired
+      if (session.mac_address) {
+        const auth = macAuthorizations.get.get(session.mac_address);
+        if (auth && new Date(auth.expires_at).getTime() <= Date.now()) {
+          logger.info(`Session ${session.session_id} expired by MAC authorization time`);
+          terminateSession(session, 'mac_auth_expired');
+          continue;
+        }
+      }
+
+      // Check quota if set
+      if (session.quota_total_mb && (session.quota_used_mb || 0) >= session.quota_total_mb) {
+        logger.info(`Session ${session.session_id} exceeded quota (${session.quota_used_mb}MB / ${session.quota_total_mb}MB)`);
+        terminateSession(session, 'quota_exceeded');
+        continue;
+      }
+
+      // Check if idle too long (5 minutes default)
+      const idleTimeout = 300;
+      if (idleSeconds >= idleTimeout) {
+        logger.info(`Session ${session.session_id} idle timed out (${idleSeconds}s)`);
+        terminateSession(session, 'idle_timeout');
+      }
     }
-
-    // Check quota if set
-    if (session.quota_total_mb && session.quota_used_mb >= session.quota_total_mb) {
-      terminateSession(session, 'quota');
-      continue;
-    }
-
-    // Check if idle too long
-    const idleTimeout = 300; // 5 minutes default
-    if (idleSeconds >= idleTimeout) {
-      terminateSession(session, 'idle');
-    }
+  } catch (err) {
+    logger.error('Error during checkIdleSessions:', err);
   }
 }
 
 async function terminateSession(session, reason) {
+  if (!session) return;
+
+  logger.info(`Terminating session ${session.session_id} (Reason: ${reason})`);
+
   sessions.update.run({
     ...session,
     is_active: 0,
@@ -59,66 +91,72 @@ async function terminateSession(session, reason) {
     end_time: new Date().toISOString(),
   });
 
-  devices.setOffline.run(session.mac_address);
+  if (session.mac_address) {
+    devices.setOffline.run(session.mac_address);
+  }
 
-  // Send CoA disconnect
-  if (session.nas_identifier) {
+  // Send RADIUS Disconnect-Request to NAS
+  const nasIp = session.nas_identifier || session.ip_address;
+  if (nasIp && nasIp !== '0.0.0.0') {
     try {
-      await disconnectSession(session.session_id, session.nas_identifier);
+      const result = await disconnectSession({
+        sessionId: session.session_id,
+        nasIp,
+        username: session.username,
+        macAddress: session.mac_address,
+        ipAddress: session.ip_address,
+      });
+
+      if (!result.success) {
+        logger.warn(`Disconnect-Request to router ${nasIp} for session ${session.session_id} returned: ${result.error}`);
+      } else {
+        logger.info(`Successfully sent Disconnect-Request to router ${nasIp} for session ${session.session_id}`);
+      }
     } catch (err) {
-      console.error('Failed to send CoA disconnect:', err);
+      logger.error(`Failed to send Disconnect-Request to router ${nasIp}:`, err);
     }
   }
 }
 
 async function handleNewConnection(userId, macAddress, nasIp) {
   const user = users.getById.get(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) return;
 
-  // Check device limit
+  // Check device limit for user
+  const maxDevices = user.max_devices || 3;
   const onlineDevices = devices.getOnlineByUser.all(userId);
-  if (onlineDevices.length >= user.max_devices) {
-    // Kick oldest device
+
+  if (onlineDevices.length >= maxDevices) {
+    // Find oldest active device
     const oldest = onlineDevices.reduce((a, b) =>
-      a.first_seen < b.first_seen ? a : b
+      new Date(a.first_seen).getTime() < new Date(b.first_seen).getTime() ? a : b
     );
 
-    // Get session for that device
-    const session = sessions.getById.get(oldest.session_id);
-    if (session) {
-      console.log(`Kicking oldest device: ${oldest.device_name || oldest.mac_address}`);
-      await terminateSession(session, 'device_limit');
+    if (oldest.session_id) {
+      const session = sessions.getById.get(oldest.session_id);
+      if (session && session.is_active) {
+        logger.info(`Device limit reached for user ${user.identifier}. Kicking oldest session ${session.session_id}`);
+        await terminateSession(session, 'device_limit');
+      }
     }
   }
-
-  // Register new device
-  devices.create.run({
-    user_id: userId,
-    mac_address: macAddress,
-    device_name: macAddress,
-    session_id: null,
-  });
-
-  devices.updateOnline.run({
-    is_online: 1,
-    session_id: null,
-    mac_address: macAddress,
-  });
 }
 
 function updateSessionActivity(sessionId, inputOctets, outputOctets) {
   const session = sessions.getBySessionId.get(sessionId);
   if (!session) return;
 
-  const trafficDelta = inputOctets + outputOctets - (session.last_bytes || 0);
+  const currentTotalBytes = inputOctets + outputOctets;
+  const lastTotalBytes = (session.last_bytes || 0);
+  const trafficDelta = currentTotalBytes - lastTotalBytes;
 
   if (trafficDelta > ACTIVITY_THRESHOLD) {
-    // User is active - pause idle timer
+    // User is active - reset idle counter
     sessions.update.run({
       ...session,
       idle_seconds: 0,
       last_activity: new Date().toISOString(),
-      quota_used_mb: Math.floor((inputOctets + outputOctets) / (1024 * 1024)),
+      quota_used_mb: Math.floor(currentTotalBytes / (1024 * 1024)),
     });
   } else {
     // User is idle - increment idle counter
@@ -135,4 +173,6 @@ module.exports = {
   handleNewConnection,
   updateSessionActivity,
   terminateSession,
+  checkIdleSessions,
 };
+

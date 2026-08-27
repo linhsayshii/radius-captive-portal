@@ -21,6 +21,10 @@ import {
   XCircleIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  CopyIcon,
+  CheckIcon,
+  TerminalIcon,
+  BookOpenIcon,
 } from "lucide-react";
 
 import { ApiError, apiRequest } from "./api";
@@ -138,7 +142,9 @@ type SettingsConfig = {
     authPort: number;
     accountingPort: number;
     coaPort: number;
+    serverIp?: string;
   };
+  portalUrl?: string;
   oauth: {
     clientIdConfigured: boolean;
     callbackUrl: string;
@@ -294,6 +300,32 @@ function NoRecords({ title, description }: { title: string; description: string 
       </EmptyHeader>
       <EmptyContent />
     </Empty>
+  );
+}
+
+function CodeSnippet({ code, label }: { code: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    void navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="relative rounded-lg bg-zinc-950 text-zinc-100 p-4 font-mono text-xs overflow-x-auto my-2 border border-zinc-800">
+      {label && <div className="text-[11px] text-zinc-400 font-sans mb-2 font-medium">{label}</div>}
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors text-xs"
+        title="Sao chép lệnh"
+      >
+        {copied ? <CheckIcon className="size-3 text-emerald-400" /> : <CopyIcon className="size-3" />}
+        <span>{copied ? "Đã sao chép!" : "Sao chép"}</span>
+      </button>
+      <pre className="whitespace-pre-wrap break-all pr-20 font-mono leading-relaxed select-all">{code}</pre>
+    </div>
   );
 }
 
@@ -523,15 +555,6 @@ function AdminApp() {
 
   // Settings test functions
   async function testRadiusConnection() {
-    if (!radiusTestInput.routerIp || !radiusTestInput.sharedSecret) {
-      toast.add({
-        title: "Thiếu thông tin",
-        description: "Vui lòng nhập Router IP và Shared Secret.",
-        type: "error",
-      });
-      return;
-    }
-
     setIsRadiusTesting(true);
     setRadiusTestResult(null);
     try {
@@ -541,6 +564,7 @@ function AdminApp() {
           routerIp: radiusTestInput.routerIp,
           sharedSecret: radiusTestInput.sharedSecret,
           authPort: radiusTestInput.authPort,
+          coaPort: settingsConfig?.radius.coaPort || 3799,
         }),
       });
       setRadiusTestResult(result);
@@ -792,9 +816,23 @@ function SettingsView({
   onTestOauth: () => void;
   onRefresh: () => void;
 }) {
+  const [customServerIp, setCustomServerIp] = useState<string>("");
+
   if (isLoading) {
     return <div className="flex flex-col gap-4"><Skeleton className="h-48 w-full" /><Skeleton className="h-48 w-full" /></div>;
   }
+
+  const effectiveServerIp = customServerIp.trim() || config?.radius.serverIp ||
+    (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" ? window.location.hostname : "192.168.1.100");
+
+  const effectivePortalUrl = (function () {
+    if (customServerIp.trim()) {
+      const port = typeof window !== "undefined" && window.location.port ? `:${window.location.port}` : "";
+      const protocol = typeof window !== "undefined" ? window.location.protocol : "http:";
+      return `${protocol}//${customServerIp.trim()}${port}`;
+    }
+    return config?.portalUrl || `http://${effectiveServerIp}:3000`;
+  })();
 
   return (
     <div className="flex flex-col gap-6">
@@ -835,27 +873,103 @@ function SettingsView({
             </div>
           </div>
 
-          <CollapsibleCard title="Hướng dẫn cấu hình Router" defaultOpen={false}>
-            <div className="space-y-4 text-sm">
+          <CollapsibleCard title="Hướng dẫn cấu hình Router (MikroTik, OpenWrt, pfSense, UniFi)" defaultOpen={true}>
+            <div className="space-y-6 text-sm">
+              {/* Dynamic IP Customizer */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3 bg-muted/60 p-3.5 rounded-lg border">
+                <div className="flex-1 w-full">
+                  <FieldLabel htmlFor="custom-portal-ip" className="text-xs font-semibold text-foreground">
+                    Địa chỉ IP / Domain máy chủ Portal của bạn (để tạo script):
+                  </FieldLabel>
+                  <Input
+                    id="custom-portal-ip"
+                    placeholder={config?.radius.serverIp || "Ví dụ: 192.168.88.5 hoặc portal.mywifi.vn"}
+                    value={customServerIp}
+                    onChange={(e) => setCustomServerIp(e.target.value)}
+                    className="bg-background font-mono text-xs mt-1"
+                  />
+                </div>
+                {customServerIp && (
+                  <Button variant="ghost" size="sm" onClick={() => setCustomServerIp("")}>
+                    Đặt lại
+                  </Button>
+                )}
+              </div>
+
+              {/* MikroTik Section */}
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <TerminalIcon className="size-4 text-primary" />
+                  <h4 className="font-semibold text-base text-primary">MikroTik RouterOS (Hotspot + RADIUS + Dynamic CoA)</h4>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Sao chép và chạy đoạn script sau trong <strong>Terminal</strong> của MikroTik RouterOS (thay <code>RADIUS_SECRET</code> bằng mật khẩu trong .env):
+                </p>
+                <CodeSnippet
+                  label="Lệnh Terminal cấu hình MikroTik RouterOS:"
+                  code={`# 1. Khai báo máy chủ RADIUS
+/radius add address=${effectiveServerIp} secret=RADIUS_SECRET service=hotspot authentication-port=${config?.radius.authPort || 1812} accounting-port=${config?.radius.accountingPort || 1813}
+
+# 2. Bật cổng nhận lệnh ngắt kết nối (Incoming CoA/Disconnect) từ Server
+/radius incoming set accept=yes port=${config?.radius.coaPort || 3799}
+
+# 3. Kích hoạt RADIUS và gửi Accounting định kỳ trong Hotspot Profile
+/ip hotspot profile set [find default=yes] use-radius=yes radius-accounting=yes radius-interim-update=1m login-by=http-pap
+/ip hotspot user profile set [find default=yes] session-timeout=1d
+
+# 4. Thêm Walled Garden cho máy chủ Portal (cho phép mở trang login trước khi kết nối)
+/ip hotspot walled-garden ip add dst-address=${effectiveServerIp} action=accept`}
+                />
+
+                <div className="mt-4 pt-3 border-t border-primary/10">
+                  <h5 className="font-medium text-xs text-foreground mb-1">Cấu hình URL Chuyển hướng (Redirect URL trong Hotspot):</h5>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Trong trang <code>login.html</code> của Hotspot Router, cấu hình URL chuyển hướng tới Portal với các biến tham số:
+                  </p>
+                  <CodeSnippet
+                    label="Redirect URL:"
+                    code={`${effectivePortalUrl}/?mac=$(mac)&link-login-only=$(link-login-only)&dst=$(link-orig)`}
+                  />
+                </div>
+              </div>
+
+              {/* WinBox GUI Guide */}
               <div>
-                <h4 className="font-semibold">MikroTik:</h4>
-                <ol className="list-inside list-decimal space-y-1 text-muted-foreground">
-                  <li>Vào <code className="bg-muted px-1 rounded">Radius</code> → Servers → Thêm server mới</li>
-                  <li>Address: Địa chỉ IP của máy chủ portal</li>
-                  <li>Secret: Shared secret đã đặt trong file .env</li>
-                  <li>Vào <code className="bg-muted px-1 rounded">Wireless</code> → Security Profiles → Chọn profile → Chọn "Use RADIUS"</li>
+                <div className="flex items-center gap-2 mb-2">
+                  <BookOpenIcon className="size-4 text-foreground" />
+                  <h4 className="font-semibold">Cấu hình qua giao diện MikroTik WinBox (Thủ công)</h4>
+                </div>
+                <ol className="list-inside list-decimal space-y-1.5 text-muted-foreground text-xs leading-relaxed">
+                  <li><strong>Khai báo RADIUS:</strong> Vào menu <code>Radius</code> → Nhấn dấu <code>+</code> → Tích chọn <code>hotspot</code> → Điền Address: <code>{effectiveServerIp}</code>, Secret: <code>RADIUS_SECRET</code>, Auth Port: <code>{config?.radius.authPort || 1812}</code>, Acct Port: <code>{config?.radius.accountingPort || 1813}</code>.</li>
+                  <li><strong>Bật Incoming CoA:</strong> Vào <code>Radius</code> → Nhấn nút <code>Incoming</code> → Tích chọn <code>Accept</code> và nhập Port: <code>{config?.radius.coaPort || 3799}</code> (để Server ngắt kết nối tập trung).</li>
+                  <li><strong>Kích hoạt trên Hotspot:</strong> Vào <code>IP</code> → <code>Hotspot</code> → <code>Server Profiles</code> → Chọn profile → Tab <code>RADIUS</code> (Tích chọn <code>Use RADIUS</code>, <code>Accounting</code>, Interim Update: <code>1m</code>) → Tab <code>Login</code> (Chọn <code>HTTP PAP</code>).</li>
+                  <li><strong>Walled Garden:</strong> Vào <code>IP</code> → <code>Hotspot</code> → <code>Walled Garden IP List</code> → Thêm Dst. Address: <code>{effectiveServerIp}</code> với Action: <code>accept</code>.</li>
                 </ol>
               </div>
-              <div>
-                <h4 className="font-semibold">Ubiquiti UniFi:</h4>
-                <ol className="list-inside list-decimal space-y-1 text-muted-foreground">
-                  <li>Vào Settings → WiFi → Chọn mạng WiFi</li>
-                  <li>Bật "Use RADIUS" và điền thông tin server</li>
-                  <li>Shared Secret phải khớp với cấu hình trong .env</li>
-                </ol>
+
+              {/* Other Routers */}
+              <div className="grid gap-4 sm:grid-cols-2 pt-2 border-t">
+                <div className="rounded-lg border p-3">
+                  <h4 className="font-semibold text-xs mb-1">OpenWrt (CoovaChilli / OpenNDS)</h4>
+                  <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                    <li>RADIUS Server: <code>{effectiveServerIp}</code></li>
+                    <li>Auth Port: <code>{config?.radius.authPort || 1812}</code> | Acct Port: <code>{config?.radius.accountingPort || 1813}</code></li>
+                    <li>UAM Server: Trỏ tới Portal URL (<code>{effectivePortalUrl}</code>)</li>
+                    <li>CoA Port: <code>{config?.radius.coaPort || 3799}</code></li>
+                  </ul>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <h4 className="font-semibold text-xs mb-1">Ubiquiti UniFi & pfSense</h4>
+                  <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                    <li>Vào Profiles → RADIUS Profile → Nhập Server IP (<code>{effectiveServerIp}</code>) và Secret</li>
+                    <li>Hotspot / Guest Control → Bật External Portal Server (<code>{effectivePortalUrl}</code>)</li>
+                    <li>Accounting: Bật Interim Update interval 60s</li>
+                  </ul>
+                </div>
               </div>
+
               <div className="rounded-lg bg-muted p-3 text-xs">
-                <code>.env</code> keys: <code>RADIUS_SHARED_SECRET</code>, <code>RADIUS_AUTH_PORT</code>, <code>RADIUS_ACCOUNTING_PORT</code>
+                <code>.env</code> keys cần chú ý: <code>RADIUS_SHARED_SECRET</code>, <code>RADIUS_AUTH_PORT={config?.radius.authPort || 1812}</code>, <code>RADIUS_ACCOUNTING_PORT={config?.radius.accountingPort || 1813}</code>, <code>RADIUS_COA_PORT={config?.radius.coaPort || 3799}</code>
               </div>
             </div>
           </CollapsibleCard>

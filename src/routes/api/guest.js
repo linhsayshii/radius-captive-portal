@@ -105,13 +105,26 @@ router.post('/cleanup', requireApiAuth, (req, res) => {
   res.json({ cleared });
 });
 
-router.delete('/whitelist/:mac', requireApiAuth, (req, res) => {
+router.delete('/whitelist/:mac', requireApiAuth, async (req, res) => {
   const mac = normalizeMac(req.params.mac);
   if (!mac || !macAuthorizations.get.get(mac)) {
     return res.status(404).json({ error: 'Không tìm thấy quyền MAC' });
   }
   macWhitelist.delete(mac);
   macAuthorizations.delete.run(mac);
+
+  // Terminate any active session and send RADIUS Disconnect-Request to router immediately
+  try {
+    const { sessions } = require('../../db');
+    const { terminateSession } = require('../../services/sessionManager');
+    const activeSession = sessions.getActiveByMac.get(mac, mac);
+    if (activeSession) {
+      await terminateSession(activeSession, 'admin_revoked_mac');
+    }
+  } catch (err) {
+    logger.error('Error disconnecting revoked MAC session:', err);
+  }
+
   logger.info('MAC authorisation revoked by admin', { macAddress: mac, adminId: req.session.adminId });
   res.json({ success: true });
 });
