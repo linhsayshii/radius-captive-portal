@@ -97,8 +97,9 @@ function readPortalContext(): PortalContext {
     "";
 
   if (!routerUrl && isAruba) {
+    // Aruba Virtual Controller login URL
     const host = switchIp || "securelogin.arubanetworks.com";
-    routerUrl = `http://${host}:4343/cgi-bin/login`;
+    routerUrl = switchIp ? `http://${host}/cgi-bin/login` : "http://securelogin.arubanetworks.com/cgi-bin/login";
   }
 
   return {
@@ -137,9 +138,11 @@ function postLoginToRouter(context: PortalContext) {
   const fields: Array<[string, string]> = context.isAruba
     ? [
         ["user", context.mac],
+        ["username", context.mac],
         ["password", context.mac],
         ["cmd", "authenticate"],
-        ["url", context.destination || "http://google.com"],
+        ["url", context.destination || "http://captive.apple.com"],
+        ["Login", "Log In"],
       ]
     : [
         ["username", context.mac],
