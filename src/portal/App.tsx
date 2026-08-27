@@ -96,10 +96,9 @@ function readPortalContext(): PortalContext {
     params.get("login_url") ||
     "";
 
-  if (!routerUrl && isAruba) {
-    // Aruba Virtual Controller login URL
-    const host = switchIp || "securelogin.arubanetworks.com";
-    routerUrl = switchIp ? `http://${host}/cgi-bin/login` : "http://securelogin.arubanetworks.com/cgi-bin/login";
+  if (!routerUrl && switchIp) {
+    // Only construct router login URL if switchIp is explicitly provided and valid
+    routerUrl = switchIp.startsWith("http") ? `${switchIp}/cgi-bin/login` : `http://${switchIp}/cgi-bin/login`;
   }
 
   return {
@@ -126,7 +125,7 @@ function postLoginToRouter(context: PortalContext) {
     if (context.destination && context.destination.startsWith("http")) {
       window.location.assign(context.destination);
     } else {
-      window.location.assign("/captive-portal/success.html");
+      window.location.assign("/success.html");
     }
     return;
   }
@@ -415,6 +414,14 @@ function PortalLogin() {
 function SuccessScreen() {
   const context = readPortalContext();
 
+  function startBrowsing() {
+    if (context.destination && context.destination.startsWith("http")) {
+      window.location.assign(context.destination);
+    } else {
+      window.location.assign("http://captive.apple.com");
+    }
+  }
+
   return (
     <PortalFrame>
       <Card className="w-full min-w-0">
@@ -422,22 +429,20 @@ function SuccessScreen() {
           <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <CheckCircle2Icon aria-hidden="true" />
           </div>
-          <CardTitle className="mt-4 text-2xl tracking-tight">Xác thực thành công</CardTitle>
+          <CardTitle className="mt-4 text-2xl tracking-tight">Kết nối thành công</CardTitle>
           <CardDescription>
-            Google đã xác nhận tài khoản của bạn. Hoàn tất bước cuối để kết nối thiết bị.
+            Thiết bị của bạn đã được xác thực và cấp quyền truy cập mạng Internet.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           {context.routerUrl ? (
             <Button size="lg" className="h-11 w-full" onClick={() => postLoginToRouter(context)}>
               Hoàn tất kết nối
             </Button>
           ) : (
-            <Alert>
-              <CircleAlertIcon aria-hidden="true" />
-              <AlertTitle>Thiết bị đã được xác thực</AlertTitle>
-              <AlertDescription>Hãy quay lại trang portal của router để bắt đầu kết nối.</AlertDescription>
-            </Alert>
+            <Button size="lg" className="h-11 w-full" onClick={startBrowsing}>
+              Bắt đầu lướt web
+            </Button>
           )}
         </CardContent>
       </Card>

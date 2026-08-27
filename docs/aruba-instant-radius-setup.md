@@ -24,7 +24,7 @@ Hướng dẫn tích hợp mạng WiFi Khách trên **Aruba Instant AP (Virtual 
 2. **Captive portal profile**: Bấm dấu **`+`** (Thêm mới):
    - **Type**: `RADIUS Authentication`
    - **IP or Hostname**: Địa chỉ IP máy chủ Portal (ví dụ: `192.168.1.50`)
-   - **URL**: `/?mac=%m` (hoặc `/`)
+   - **URL**: `/?mac=%m&switchip=%s&url=%u` (hoặc `/?mac=%m`)
    - **Port**: `3000` (hoặc cổng HTTP/HTTPS web portal của bạn)
    - **Protocol**: `HTTP`
    - **Redirect URL**: Để trống.
@@ -68,7 +68,7 @@ wlan auth-server Portal-RADIUS
 wlan external-captive-portal Portal-Web
   server 192.168.1.50
   port 3000
-  url "/?mac=%m"
+  url "/?mac=%m&switchip=%s&url=%u"
   auth-text ""
   https no
 
