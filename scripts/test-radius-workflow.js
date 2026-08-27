@@ -103,24 +103,12 @@ async function runTests() {
   assert.strictEqual(terminatedSession.terminated_by, 'admin_test_kick');
   console.log('✅ Session termination & database update passed');
 
-  // Test 7: Google OAuth Grace Period Lifecycle
-  console.log('Test 7: Google OAuth Grace Period (3 minutes temporary access)');
+  // Test 7: Google OAuth Flow (Direct authorization upon callback)
+  console.log('Test 7: Google OAuth authorization upon successful callback');
   const oauthMac = '00:11:22:33:44:55';
   const normalizedOauthMac = normalizeMac(oauthMac);
   const { revokeMac } = require('../src/routes/api/guest');
-  const { OAUTH_GRACE_PERIOD_MS } = require('../src/routes/oauth');
 
-  // Step 1: Pre-authorize for OAuth
-  authorizeMac(oauthMac, { access_type: 'oauth_grace', ip_address: '192.168.88.100' }, OAUTH_GRACE_PERIOD_MS);
-  let graceAuth = getAuthorizedMac(oauthMac);
-  assert(graceAuth !== null);
-  assert.strictEqual(graceAuth.access_type, 'oauth_grace');
-  const remainingSeconds = Math.round((new Date(graceAuth.expires_at).getTime() - Date.now()) / 1000);
-  assert(remainingSeconds > 170 && remainingSeconds <= 180, `Expected ~180s, got ${remainingSeconds}s`);
-  console.log(`✅ Temporary OAuth Grace Period granted (${remainingSeconds}s remaining)`);
-
-  // Step 2: Simulate successful Google OAuth callback -> Upgrade to 24h
-  console.log('Test 8: Upgrade OAuth Grace Period to full 24h access upon successful callback');
   db.prepare('DELETE FROM users WHERE email = ?').run('user@example.com');
   const userResult = users.create.run({
     type: 'oauth',
@@ -136,29 +124,31 @@ async function runTests() {
     access_type: 'oauth',
     user_id: testUserId,
     username: 'user@example.com',
+    ip_address: '192.168.88.100',
   }, 24 * 60 * 60 * 1000);
-  let upgradedAuth = getAuthorizedMac(oauthMac);
-  assert(upgradedAuth !== null);
-  assert.strictEqual(upgradedAuth.access_type, 'oauth');
-  assert.strictEqual(upgradedAuth.username, 'user@example.com');
-  const upgradedHours = (new Date(upgradedAuth.expires_at).getTime() - Date.now()) / (1000 * 60 * 60);
-  assert(upgradedHours > 23 && upgradedHours <= 24);
-  console.log('✅ Upgraded to 24h full OAuth session successfully');
 
-  // Step 3: Revoke MAC authorization
-  console.log('Test 9: Revoke MAC and verify rejection');
+  let oauthAuthEntry = getAuthorizedMac(oauthMac);
+  assert(oauthAuthEntry !== null);
+  assert.strictEqual(oauthAuthEntry.access_type, 'oauth');
+  assert.strictEqual(oauthAuthEntry.username, 'user@example.com');
+  const hoursRemaining = (new Date(oauthAuthEntry.expires_at).getTime() - Date.now()) / (1000 * 60 * 60);
+  assert(hoursRemaining > 23 && hoursRemaining <= 24);
+  console.log('✅ Google OAuth 24h authorization granted successfully');
+
+  // Test 8: Revoke MAC authorization
+  console.log('Test 8: Revoke MAC and verify rejection');
   revokeMac(oauthMac);
   assert.strictEqual(getAuthorizedMac(oauthMac), null);
   console.log('✅ Revoke MAC passed');
 
-  // Step 4: Grace Period Auto-Expiration test
-  console.log('Test 10: Auto-expiration of expired OAuth Grace Period via checkIdleSessions');
+  // Test 9: MAC Authorization Expiration check
+  console.log('Test 9: Auto-expiration of expired MAC authorization via checkIdleSessions');
   const expiredMac = '66:77:88:99:aa:bb';
   const normalizedExpiredMac = normalizeMac(expiredMac);
-  const expiredSessionId = `sess-expired-grace-${Date.now()}`;
+  const expiredSessionId = `sess-expired-${Date.now()}`;
   
-  // Create an expired grace auth (expired 5 seconds ago)
-  authorizeMac(expiredMac, { access_type: 'oauth_grace' }, -5000);
+  // Create an expired auth (expired 5 seconds ago)
+  authorizeMac(expiredMac, { access_type: 'oauth' }, -5000);
   
   sessions.create.run({
     user_id: null,
@@ -177,8 +167,8 @@ async function runTests() {
 
   const checkedSession = sessions.getBySessionId.get(expiredSessionId);
   assert.strictEqual(checkedSession.is_active, 0);
-  assert.strictEqual(checkedSession.terminated_by, 'oauth_grace_expired');
-  console.log('✅ Expired grace session successfully terminated with oauth_grace_expired');
+  assert.strictEqual(checkedSession.terminated_by, 'mac_auth_expired');
+  console.log('✅ Expired MAC session successfully terminated with mac_auth_expired');
 
   // Clean up
   db.prepare('DELETE FROM sessions WHERE session_id = ?').run(expiredSessionId);
@@ -193,5 +183,6 @@ runTests().catch(err => {
   console.error('❌ Test failed:', err);
   process.exit(1);
 });
+
 
 

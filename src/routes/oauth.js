@@ -2,26 +2,13 @@ const crypto = require('crypto');
 const express = require('express');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const { users, oauth, sessions } = require('../db');
+const { users, oauth, logs } = require('../db');
 const { loadConfig } = require('../config');
-const { authorizeMac, normalizeMac, revokeMac, getAuthorizedMac } = require('./api/guest');
-const { terminateSession } = require('../services/sessionManager');
+const { authorizeMac, normalizeMac } = require('./api/guest');
 const logger = require('../utils/logger');
 
 const router = express.Router();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-const OAUTH_GRACE_PERIOD_MS = 3 * 60 * 1000; // 3 minutes temporary access
-
-async function revokeActiveSession(mac, reason) {
-  try {
-    const activeSession = sessions.getActiveByMac.get(mac, mac);
-    if (activeSession) {
-      await terminateSession(activeSession, reason);
-    }
-  } catch (err) {
-    logger.error('Error disconnecting revoked OAuth session:', err);
-  }
-}
 
 function isGoogleConfigured(config) {
   return Boolean(config.googleClientId && config.googleClientSecret && config.googleCallbackUrl);
@@ -148,51 +135,6 @@ function ensurePassportConfigured() {
   return passportConfigured;
 }
 
-// POST /auth/google/prepare
-// Pre-authorizes the client MAC with a 3-minute grace period to access Google OAuth
-router.post('/google/prepare', (req, res) => {
-  const config = loadConfig();
-  if (!isGoogleConfigured(config) || !ensurePassportConfigured()) {
-    return res.status(503).json({ error: 'oauth_not_configured' });
-  }
-
-  const rawMac = req.body.mac || req.query.mac;
-  const mac = normalizeMac(rawMac);
-  if (!mac) {
-    return res.status(400).json({ error: 'invalid_mac' });
-  }
-
-  const candidateRouterUrl = typeof req.body.router_url === 'string' ? req.body.router_url : (req.query.router_url || '');
-  const routerUrl = isSafeRouterUrl(candidateRouterUrl, req.get('host') || '') ? candidateRouterUrl : '';
-  const destination = typeof req.body.dst === 'string' ? req.body.dst.slice(0, 1024) : (typeof req.query.dst === 'string' ? req.query.dst.slice(0, 1024) : '');
-
-  // Grant temporary 3-minute grace period if device doesn't already have valid full access
-  const existing = getAuthorizedMac(mac);
-  let entry = existing;
-  if (!existing || existing.access_type === 'oauth_grace') {
-    entry = authorizeMac(mac, {
-      access_type: 'oauth_grace',
-      ip_address: req.ip,
-      user_agent: req.headers['user-agent'],
-    }, OAUTH_GRACE_PERIOD_MS);
-
-    logger.info('Temporary OAuth grace period granted for MAC', {
-      macAddress: mac,
-      expiresAt: entry.expires_at,
-      ip: req.ip,
-    });
-  }
-
-  return res.json({
-    success: true,
-    mac,
-    routerUrl,
-    destination,
-    expires_at: entry.expires_at,
-    grace_period_seconds: 180,
-  });
-});
-
 router.get('/google', (req, res, next) => {
   const config = loadConfig();
   if (!isGoogleConfigured(config) || !ensurePassportConfigured()) {
@@ -203,23 +145,6 @@ router.get('/google', (req, res, next) => {
   const candidateRouterUrl = typeof req.query.router_url === 'string' ? req.query.router_url : '';
   const routerUrl = isSafeRouterUrl(candidateRouterUrl, req.get('host') || '') ? candidateRouterUrl : '';
   const destination = typeof req.query.dst === 'string' ? req.query.dst.slice(0, 1024) : '';
-
-  // Ensure MAC has temporary grace period access while logging in
-  if (mac) {
-    const existing = getAuthorizedMac(mac);
-    if (!existing || existing.access_type === 'oauth_grace') {
-      authorizeMac(mac, {
-        access_type: 'oauth_grace',
-        ip_address: req.ip,
-        user_agent: req.headers['user-agent'],
-      }, OAUTH_GRACE_PERIOD_MS);
-
-      logger.info('Temporary OAuth grace period activated on /auth/google', {
-        macAddress: mac,
-      });
-    }
-  }
-
   const state = createState({ destination, mac, routerUrl }, config.sessionSecret);
 
   return passport.authenticate('google', {
@@ -238,50 +163,54 @@ router.get('/google/callback', (req, res, next) => {
   const context = readState(req.query.state, config.sessionSecret);
   if (!context) return redirectToError(res, 'invalid_oauth_state');
 
-  return passport.authenticate('google', async (error, user, info) => {
-    if (error) {
-      if (context.mac) {
-        revokeMac(context.mac);
-        await revokeActiveSession(context.mac, 'oauth_error');
-      }
-      return next(error);
-    }
-    if (!user) {
-      if (context.mac) {
-        revokeMac(context.mac);
-        await revokeActiveSession(context.mac, 'oauth_rejected');
-      }
-      return redirectToError(res, info?.message === 'Email not whitelisted' ? 'unauthorized' : 'oauth_failed');
-    }
+  return passport.authenticate('google', { failureRedirect: '/error.html?error=unauthorized' })(req, res, (error) => {
+    if (error) return next(error);
+    if (!req.user) return redirectToError(res, 'oauth_failed');
 
-    req.logIn(user, (loginErr) => {
-      if (loginErr) return next(loginErr);
+    req.session.userId = req.user.id;
+    req.session.userType = 'oauth';
 
-      req.session.userId = user.id;
-      req.session.userType = 'oauth';
-
-      if (context.mac) {
-        const authorization = authorizeMac(context.mac, {
-          access_type: 'oauth',
-          ip_address: req.ip,
-          user_agent: req.headers['user-agent'],
-          user_id: user.id,
-          username: user.email,
-        });
-        logger.info('OAuth WiFi access granted & upgraded to full session', {
-          email: user.email,
-          expiresAt: authorization.expires_at,
-          macAddress: context.mac,
-        });
-      }
-
-      return req.session.save((saveError) => {
-        if (saveError) return next(saveError);
-        return redirectToSuccess(res, context);
+    if (context.mac) {
+      const authorization = authorizeMac(context.mac, {
+        access_type: 'oauth',
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent'],
+        user_id: req.user.id,
+        username: req.user.email,
       });
+
+      // Log successful connection
+      try {
+        logs.create.run({
+          user_id: req.user.id,
+          session_id: context.mac,
+          mac_address: context.mac,
+          ip_address: req.ip,
+          action: 'oauth_connect',
+          nas_identifier: null,
+          details: JSON.stringify({
+            email: req.user.email,
+            user_agent: req.headers['user-agent'],
+          }),
+        });
+      } catch (logErr) {
+        logger.error('Error recording OAuth connection log:', logErr);
+      }
+
+      logger.info('OAuth WiFi access granted', {
+        email: req.user.email,
+        expiresAt: authorization.expires_at,
+        macAddress: context.mac,
+      });
+    }
+
+    return req.session.save((saveError) => {
+      if (saveError) return next(saveError);
+      return redirectToSuccess(res, context);
     });
-  })(req, res, next);
+  });
 });
 
-module.exports = { router, passport, OAUTH_GRACE_PERIOD_MS };
+module.exports = { router, passport };
+
 
