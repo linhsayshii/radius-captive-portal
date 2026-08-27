@@ -9,29 +9,62 @@ const { requireApiAuth } = require('../../middleware/auth');
 // AA-BB-CC-DD-EE-FF resolve to the same device.
 const macWhitelist = new Map();
 
+const { getMacFromIp } = require('../../utils/arp');
+
+// Helper to normalize MAC address
+function normalizeMac(mac) {
+  if (!mac || typeof mac !== 'string') return null;
+  try {
+    mac = decodeURIComponent(mac);
+  } catch (_) {}
+  const normalized = mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  return normalized.length === 12 ? normalized : null;
+}
+
+// GET /api/guest/client-info
+// Returns detected client IP and MAC (via ARP or headers)
+router.get('/client-info', (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || '';
+  const headerMac = req.headers['x-mac-address'] || req.headers['mac-address'] || req.headers['x-client-mac'];
+  const queryMac = req.query.mac || req.query.client_mac || req.query.sta_mac;
+  const arpMac = getMacFromIp(ip);
+
+  const rawMac = headerMac || queryMac || arpMac;
+  const normalized = normalizeMac(rawMac);
+
+  res.json({
+    ip,
+    mac: normalized || null,
+    raw_mac: rawMac || null,
+  });
+});
+
 // Guest connect - register MAC and allow access
 router.post('/connect', async (req, res) => {
   try {
     // Try to get MAC from different sources
-    let macAddress = req.body.mac_address;
+    let rawMac = req.body.mac_address;
 
-    // From MikroTik header (if passed)
-    if (!macAddress) {
-      macAddress = req.headers['x-mac-address'] || req.headers['mac-address'];
+    // From headers (MikroTik / Aruba / Reverse proxy)
+    if (!rawMac || !normalizeMac(rawMac)) {
+      rawMac = req.headers['x-mac-address'] || req.headers['mac-address'] || req.headers['x-client-mac'] || req.headers['client-mac'];
     }
 
-    // From query param (captive portal often passes MAC)
-    if (!macAddress) {
-      macAddress = req.query.mac;
+    // From query params
+    if (!rawMac || !normalizeMac(rawMac)) {
+      rawMac = req.query.mac || req.query.client_mac || req.query.clientMac || req.query.sta_mac || req.query.usermac || req.query.user_mac;
     }
 
-    if (!macAddress) {
-      return res.status(400).json({ error: 'Không nhận được địa chỉ MAC từ router' });
+    // From ARP table by IP
+    if (!rawMac || !normalizeMac(rawMac)) {
+      rawMac = getMacFromIp(req.ip || req.socket.remoteAddress);
     }
 
-    macAddress = normalizeMac(macAddress);
+    const macAddress = normalizeMac(rawMac);
     if (!macAddress) {
-      return res.status(400).json({ error: 'Địa chỉ MAC không hợp lệ' });
+      return res.status(400).json({
+        error: 'Không nhận diện được địa chỉ MAC thiết bị. Vui lòng mở portal qua trang chuyển hướng của router.',
+      });
     }
 
     // Check if already registered
@@ -130,12 +163,6 @@ router.delete('/whitelist/:mac', requireApiAuth, async (req, res) => {
 });
 
 // Helper functions
-function normalizeMac(mac) {
-  if (typeof mac !== 'string') return null;
-  const normalized = mac.replace(/[:\-\.\s]/g, '').toLowerCase();
-  return /^[0-9a-f]{12}$/.test(normalized) ? normalized : null;
-}
-
 function authorizeMac(mac, details = {}, durationMs = 24 * 60 * 60 * 1000) {
   const normalized = normalizeMac(mac);
   if (!normalized) throw new Error('Invalid MAC address');

@@ -34,6 +34,7 @@ type PortalContext = {
   destination: string;
   mac: string;
   routerUrl: string;
+  isAruba: boolean;
 };
 
 type Notice = {
@@ -42,14 +43,69 @@ type Notice = {
   variant: "default" | "destructive";
 };
 
+function isValidMac(val: string): boolean {
+  if (!val || typeof val !== "string") return false;
+  try {
+    val = decodeURIComponent(val);
+  } catch (_) {}
+  const cleaned = val.replace(/[^a-fA-F0-9]/g, "");
+  return cleaned.length === 12;
+}
+
+function findValidMac(params: URLSearchParams): string {
+  const keys = [
+    "mac",
+    "client_mac",
+    "clientMac",
+    "client-mac",
+    "sta_mac",
+    "sta-mac",
+    "usermac",
+    "user_mac",
+    "mac_address",
+    "mac-address",
+    "id", // UniFi
+  ];
+
+  for (const key of keys) {
+    const values = params.getAll(key);
+    for (const v of values) {
+      if (isValidMac(v)) return v;
+    }
+  }
+
+  // Also check all query params
+  for (const [, value] of params.entries()) {
+    if (isValidMac(value)) return value;
+  }
+
+  return "";
+}
+
 function readPortalContext(): PortalContext {
   const params = new URLSearchParams(window.location.search);
+  const mac = findValidMac(params);
+
+  const switchIp = params.get("switchip") || params.get("switch_ip") || params.get("ap_ip") || "";
+  const isAruba = Boolean(switchIp || params.get("cmd") === "login");
+
+  let routerUrl =
+    params.get("link-login-only") ||
+    params.get("link-login") ||
+    params.get("router_url") ||
+    params.get("login_url") ||
+    "";
+
+  if (!routerUrl && isAruba) {
+    const host = switchIp || "securelogin.arubanetworks.com";
+    routerUrl = `http://${host}:4343/cgi-bin/login`;
+  }
 
   return {
-    mac: params.get("mac") || params.get("mac-address") || "",
-    routerUrl:
-      params.get("link-login-only") || params.get("link-login") || params.get("router_url") || "",
-    destination: params.get("dst") || params.get("orig") || "",
+    mac,
+    routerUrl,
+    destination: params.get("dst") || params.get("url") || params.get("userurl") || params.get("orig") || "",
+    isAruba,
   };
 }
 
@@ -66,7 +122,11 @@ function updateMode(mode?: "account") {
 
 function postLoginToRouter(context: PortalContext) {
   if (!context.routerUrl) {
-    window.location.assign("/");
+    if (context.destination && context.destination.startsWith("http")) {
+      window.location.assign(context.destination);
+    } else {
+      window.location.assign("/captive-portal/success.html");
+    }
     return;
   }
 
@@ -74,11 +134,20 @@ function postLoginToRouter(context: PortalContext) {
   form.method = "post";
   form.action = context.routerUrl;
 
-  [
-    ["username", context.mac],
-    ["password", context.mac],
-    ["dst", context.destination],
-  ].forEach(([name, value]) => {
+  const fields: Array<[string, string]> = context.isAruba
+    ? [
+        ["user", context.mac],
+        ["password", context.mac],
+        ["cmd", "authenticate"],
+        ["url", context.destination || "http://google.com"],
+      ]
+    : [
+        ["username", context.mac],
+        ["password", context.mac],
+        ["dst", context.destination],
+      ];
+
+  fields.forEach(([name, value]) => {
     if (!value) return;
     const input = document.createElement("input");
     input.type = "hidden";
@@ -240,12 +309,25 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
 }
 
 function PortalLogin() {
-  const context = readPortalContext();
+  const [context, setContext] = useState<PortalContext>(() => readPortalContext());
   const [view, setView] = useState<"choice" | "account">(
     new URLSearchParams(window.location.search).get("mode") === "account" ? "account" : "choice",
   );
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+
+  useEffect(() => {
+    if (!context.mac) {
+      fetch("/api/guest/client-info")
+        .then((res) => res.json())
+        .then((data: { mac?: string | null }) => {
+          if (data?.mac) {
+            setContext((prev) => ({ ...prev, mac: data.mac || "" }));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [context.mac]);
 
   function showAccount() {
     setNotice(null);
@@ -261,21 +343,12 @@ function PortalLogin() {
 
   async function connectInstantly() {
     setNotice(null);
-    if (!context.mac) {
-      setNotice({
-        title: "Không nhận được thiết bị",
-        message: "Hãy mở portal từ trang chuyển hướng của router để tiếp tục.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsConnecting(true);
     try {
       const response = await fetch("/api/guest/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mac_address: context.mac }),
+        body: JSON.stringify({ mac_address: context.mac || undefined }),
       });
       const payload = await response.json();
 
@@ -283,7 +356,8 @@ function PortalLogin() {
         throw new Error(payload.error || "Không thể cấp quyền truy cập.");
       }
 
-      postLoginToRouter(context);
+      const activeMac = payload.mac_address || context.mac;
+      postLoginToRouter({ ...context, mac: activeMac });
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",
