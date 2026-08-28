@@ -91,37 +91,7 @@ router.post('/connect', async (req, res) => {
       durationMs = pkg.duration_minutes * 60 * 1000;
     }
 
-    // Check if already registered with same package
-    const existingAuth = getAuthorizedMac(macAddress);
-    if (existingAuth) {
-      // If different package requested, re-authorize
-      if (!packageId || existingAuth.package_id !== packageId) {
-        const entry = authorizeMac(macAddress, {
-          connected_at: new Date().toISOString(),
-          ip_address: req.ip,
-          user_agent: req.headers['user-agent'],
-          access_type: 'instant',
-          package_id: packageId,
-          ...packageDetails,
-        }, durationMs);
-        logger.info('Guest re-authorized with new package', { macAddress, packageId });
-        return res.json({
-          success: true,
-          message: 'Kết nối thành công',
-          mac_address: macAddress,
-          expires_at: entry.expires_at,
-          package: packageDetails,
-        });
-      }
-      logger.info('Guest already connected', { macAddress });
-      return res.json({
-        success: true,
-        message: 'Đã kết nối trước đó',
-        mac_address: macAddress,
-      });
-    }
-
-    // Add to whitelist
+    // Authorize / Refresh MAC entry
     const entry = authorizeMac(macAddress, {
       connected_at: new Date().toISOString(),
       ip_address: req.ip,

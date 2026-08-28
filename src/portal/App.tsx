@@ -133,7 +133,7 @@ function readPortalContext(): PortalContext {
   };
 }
 
-function updateMode(mode?: "account" | "packages") {
+function updateMode(mode?: "account" | "packages" | "success") {
   const params = new URLSearchParams(window.location.search);
   if (mode) {
     params.set("mode", mode);
@@ -359,14 +359,15 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
 
 function PortalLogin() {
   const [context, setContext] = useState<PortalContext>(() => readPortalContext());
-  const [view, setView] = useState<"choice" | "account" | "packages">(() => {
+  const [view, setView] = useState<"choice" | "account" | "packages" | "success">(() => {
     const mode = new URLSearchParams(window.location.search).get("mode");
-    return mode === "account" ? "account" : mode === "packages" ? "packages" : "choice";
+    return mode === "account" ? "account" : mode === "packages" ? "packages" : mode === "success" ? "success" : "choice";
   });
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [packages, setPackages] = useState<Package[]>([]);
   const [selectedPackage, setSelectedPackage] = useState<number | null>(null);
+  const [connectedPackage, setConnectedPackage] = useState<any | null>(null);
   const [loadingPackages, setLoadingPackages] = useState(false);
 
   useEffect(() => {
@@ -448,15 +449,21 @@ function PortalLogin() {
       }
 
       const activeMac = payload.mac_address || context.mac;
+      const pkgInfo = payload.package || packages.find((p) => p.id === selectedPackage) || null;
+      setConnectedPackage(pkgInfo);
+      setIsConnecting(false);
+      setView("success");
+      updateMode("success");
+
       postLoginToRouter({ ...context, mac: activeMac });
 
-      // Fallback: If browser didn't navigate from form submit within 4s, navigate to success/destination
+      // Automatically redirect to destination / Apple captive detect after 2.5 seconds
       window.setTimeout(() => {
         const dest = context.destination && context.destination.startsWith("http")
           ? context.destination
-          : "/success.html";
+          : "http://captive.apple.com/hotspot-detect.html";
         window.location.assign(dest);
-      }, 4000);
+      }, 2500);
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",
@@ -484,9 +491,60 @@ function PortalLogin() {
     return `${kbps} kbps`;
   }
 
+  function startBrowsing() {
+    const dest = context.destination && context.destination.startsWith("http")
+      ? context.destination
+      : "http://captive.apple.com/hotspot-detect.html";
+    window.location.assign(dest);
+  }
+
   return (
     <PortalFrame>
-      {view === "account" ? (
+      {view === "success" ? (
+        <Card className="w-full min-w-0">
+          <CardHeader>
+            <div className="flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+              <CheckCircle2Icon className="size-6" aria-hidden="true" />
+            </div>
+            <CardTitle className="mt-4 text-2xl tracking-tight text-foreground">
+              Kết nối thành công!
+            </CardTitle>
+            <CardDescription>
+              Thiết bị của bạn đã được xác thực và sẵn sàng truy cập mạng Internet.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {connectedPackage ? (
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
+                <div className="font-semibold text-foreground text-base">
+                  {connectedPackage.name || "Gói cước đã kích hoạt"}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  {connectedPackage.duration_minutes ? (
+                    <span className="font-medium text-foreground/80">
+                      ⏱️ {formatDuration(connectedPackage.duration_minutes)}
+                    </span>
+                  ) : null}
+                  {connectedPackage.bandwidth_down_kbps ? (
+                    <span>↓ {formatSpeed(connectedPackage.bandwidth_down_kbps)}</span>
+                  ) : null}
+                  {connectedPackage.bandwidth_up_kbps ? (
+                    <span>↑ {formatSpeed(connectedPackage.bandwidth_up_kbps)}</span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            <Button size="lg" className="h-12 w-full text-base font-semibold" onClick={startBrowsing}>
+              Bắt đầu lướt web
+            </Button>
+          </CardContent>
+          <CardFooter>
+            <p className="text-xs text-muted-foreground text-center w-full">
+              Hệ thống đang tự động chuyển hướng vào Internet...
+            </p>
+          </CardFooter>
+        </Card>
+      ) : view === "account" ? (
         <AccountLogin context={context} onBack={showChoice} />
       ) : view === "packages" ? (
         <Card className="w-full min-w-0">
@@ -608,12 +666,10 @@ function SuccessScreen() {
   const context = readPortalContext();
 
   function finish() {
-    if (context.routerUrl) {
-      postLoginToRouter(context);
-    } else if (context.destination && context.destination.startsWith("http")) {
+    if (context.destination && context.destination.startsWith("http")) {
       window.location.assign(context.destination);
     } else {
-      window.location.assign("http://captive.apple.com");
+      window.location.assign("http://captive.apple.com/hotspot-detect.html");
     }
   }
 
@@ -621,8 +677,8 @@ function SuccessScreen() {
     <PortalFrame>
       <Card className="w-full min-w-0">
         <CardHeader>
-          <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <CheckCircle2Icon aria-hidden="true" />
+          <div className="flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+            <CheckCircle2Icon className="size-6" aria-hidden="true" />
           </div>
           <CardTitle className="mt-4 text-2xl tracking-tight">Kết nối thành công</CardTitle>
           <CardDescription>
@@ -630,8 +686,8 @@ function SuccessScreen() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <Button size="lg" className="h-11 w-full" onClick={finish}>
-            {context.routerUrl ? "Hoàn tất kết nối" : "Bắt đầu lướt web"}
+          <Button size="lg" className="h-12 w-full text-base font-semibold" onClick={finish}>
+            Bắt đầu lướt web
           </Button>
         </CardContent>
       </Card>
