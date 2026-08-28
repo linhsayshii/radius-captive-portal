@@ -456,14 +456,6 @@ function PortalLogin() {
       updateMode("success");
 
       postLoginToRouter({ ...context, mac: activeMac });
-
-      // Automatically redirect to destination / Apple captive detect after 2.5 seconds
-      window.setTimeout(() => {
-        const dest = context.destination && context.destination.startsWith("http")
-          ? context.destination
-          : "http://captive.apple.com/hotspot-detect.html";
-        window.location.assign(dest);
-      }, 2500);
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",
