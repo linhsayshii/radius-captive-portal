@@ -1,5 +1,5 @@
 const { sessions, devices, users, packages, macAuthorizations } = require('../db');
-const { disconnectSession } = require('./radiusClient');
+const { disconnectSession, expireSession } = require('./radiusClient');
 const { getAccessPolicy } = require('./accessPolicy');
 const logger = require('../utils/logger');
 
@@ -126,13 +126,15 @@ async function terminateSession(session, reason, { allowLocalTermination = false
 
   logger.info(`Terminating session ${session.session_id} (Reason: ${reason})`);
 
-  // Send RADIUS Disconnect-Request to NAS
+  // A manual dashboard kick follows RouterOS's Session-Timeout path, which
+  // mirrors a naturally expired account and prompts captive re-detection on
+  // supported clients. Other termination reasons use Disconnect-Request.
   const nasIp = session.nas_identifier || session.ip_address;
   let disconnect = { attempted: false, success: false };
   if (nasIp && nasIp !== '0.0.0.0' && nasIp !== 'unknown') {
     disconnect.attempted = true;
     try {
-      const result = await disconnectSession({
+      const target = {
         sessionId: session.session_id,
         nasIp,
         username: session.username,
@@ -142,7 +144,18 @@ async function terminateSession(session, reason, { allowLocalTermination = false
         nasPortType: session.nas_port_type,
         nasPortId: session.nas_port_id,
         calledStationId: session.called_station_id,
-      });
+      };
+      const shouldExpireViaRouter = reason === 'admin' || reason === 'admin_device_kick';
+      let result = shouldExpireViaRouter
+        ? await expireSession(target, 1)
+        : await disconnectSession(target);
+
+      if (!result.success && shouldExpireViaRouter) {
+        logger.warn(`Router did not accept CoA Session-Timeout for ${session.session_id}; falling back to Disconnect-Request`, {
+          error: result.error,
+        });
+        result = await disconnectSession(target);
+      }
 
       disconnect = { attempted: true, ...result };
       if (!result.success) {

@@ -134,6 +134,14 @@ function testDynamicAuthorizationPackets() {
   const vendorSpecificAttribute = readAttributes(coa.packet).find((attribute) => attribute.type === 26);
   assert(vendorSpecificAttribute, 'CoA must include a Vendor-Specific Attribute for the rate limit');
   assert.strictEqual(vendorSpecificAttribute.value.readUInt32BE(0), 14988);
+
+  const timeoutCoa = buildRfc5176Packet(COA_REQUEST, 19, {
+    'Acct-Session-Id': 'session-test-1',
+    'Session-Timeout': 1,
+  });
+  const sessionTimeout = readAttributes(timeoutCoa.packet).find((attribute) => attribute.type === 27);
+  assert(sessionTimeout, 'CoA must support Session-Timeout for graceful expiration');
+  assert.strictEqual(sessionTimeout.value.readUInt32BE(0), 1);
 }
 
 function testDeviceStatusUsesActiveSession() {

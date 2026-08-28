@@ -421,6 +421,30 @@ async function disconnectSession(target, legacyNasIp) {
   return response;
 }
 
+/**
+ * End a session through the same RouterOS Session-Timeout path used when a
+ * customer's time allowance expires. This preserves the NAS's normal captive
+ * re-detection behaviour; callers can fall back to Disconnect-Request when a
+ * NAS does not accept CoA.
+ */
+async function expireSession(target, timeoutSeconds = 1) {
+  const nasIp = target?.nasIp || target?.nas_identifier;
+  const selectors = buildDisconnectSelectors(target || {});
+  if (!selectors.length) {
+    return { success: false, error: 'Thiếu thông tin để nhận diện phiên cần hết hạn' };
+  }
+
+  let lastResult;
+  for (const selector of selectors) {
+    const attributes = { ...selector.attributes, 'Session-Timeout': Math.max(1, Math.floor(timeoutSeconds)) };
+    logger.info(`Sending RADIUS CoA Session-Timeout to NAS ${nasIp} using ${selector.label}`, attributes);
+    const result = await sendDynAuthPacket(nasIp, COA_REQUEST, attributes);
+    if (result.success) return result;
+    lastResult = result;
+  }
+  return lastResult;
+}
+
 // Some NAS implementations require a single selector, and reject a request
 // when an otherwise valid session is accompanied by a differently-formatted
 // secondary identifier. Try the unique accounting id first, then identity
@@ -500,6 +524,7 @@ async function applyQuota(sessionId, nasIp, quotaMb, macAddress) {
 module.exports = {
   sendCoA,
   disconnectSession,
+  expireSession,
   changeBandwidth,
   applyQuota,
   buildRfc5176Packet,
