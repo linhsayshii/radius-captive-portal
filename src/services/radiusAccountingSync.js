@@ -39,7 +39,7 @@ const upsertDeviceFromRadius = db.prepare(`
     is_online = excluded.is_online, last_seen = CURRENT_TIMESTAMP
 `);
 
-async function syncRadiusAccounting() {
+async function performRadiusAccountingSync() {
   const records = await getRecentAccounting();
   let synchronized = 0;
 
@@ -90,6 +90,15 @@ async function syncRadiusAccounting() {
     }
   }
   return { records: records.length, synchronized };
+}
+
+let syncInFlight = null;
+function syncRadiusAccounting() {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = performRadiusAccountingSync().finally(() => {
+    syncInFlight = null;
+  });
+  return syncInFlight;
 }
 
 let accountingTimer = null;

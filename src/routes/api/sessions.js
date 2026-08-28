@@ -2,10 +2,21 @@ const express = require('express');
 const { sessions, db } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
 const { terminateSession, getLiveMetrics } = require('../../services/sessionManager');
+const { syncRadiusAccounting } = require('../../services/radiusAccountingSync');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 
-router.get('/', requireApiAuth, (req, res) => {
+router.get('/', requireApiAuth, async (req, res) => {
+  try {
+    const sync = await syncRadiusAccounting();
+    res.set('X-Radius-Accounting-Sync', `${sync.synchronized}/${sync.records}`);
+  } catch (error) {
+    // Keep the dashboard usable with its last SQLite projection while making
+    // a failed MariaDB accounting sync visible in server logs.
+    logger.warn('Unable to refresh RADIUS accounting for sessions API', { error: error.message });
+    res.set('X-Radius-Accounting-Sync', 'unavailable');
+  }
   const activeSessions = sessions.getActive.all().map(s => {
     const live = s.session_id ? getLiveMetrics(s.session_id) : { rateDownKbps: 0, rateUpKbps: 0 };
     return {

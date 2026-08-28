@@ -2,10 +2,17 @@ const express = require('express');
 const { sessions, devices, users, db } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
 const { getTotalLiveBandwidth } = require('../../services/sessionManager');
+const { syncRadiusAccounting } = require('../../services/radiusAccountingSync');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 
-router.get('/stats', requireApiAuth, (req, res) => {
+router.get('/stats', requireApiAuth, async (req, res) => {
+  try {
+    await syncRadiusAccounting();
+  } catch (error) {
+    logger.warn('Unable to refresh RADIUS accounting for stats API', { error: error.message });
+  }
   const totalUsers = users.getAll.all().length;
   const activeSessions = sessions.getActive.all().length;
 
