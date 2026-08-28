@@ -55,6 +55,51 @@ type Package = {
   is_active: boolean;
 };
 
+type PendingRouterLogin = {
+  expiresAt: number;
+  mode: "account";
+};
+
+const ROUTER_LOGIN_ATTEMPT_KEY = "wifi-portal.pending-router-login";
+const ROUTER_LOGIN_ATTEMPT_TTL_MS = 30 * 1000;
+
+function readPendingRouterLogin(): PendingRouterLogin | null {
+  try {
+    const raw = window.sessionStorage.getItem(ROUTER_LOGIN_ATTEMPT_KEY);
+    if (!raw) return null;
+
+    const pending = JSON.parse(raw) as PendingRouterLogin;
+    if (pending.mode !== "account" || pending.expiresAt <= Date.now()) {
+      window.sessionStorage.removeItem(ROUTER_LOGIN_ATTEMPT_KEY);
+      return null;
+    }
+    return pending;
+  } catch {
+    return null;
+  }
+}
+
+function rememberRouterLoginAttempt() {
+  try {
+    const pending: PendingRouterLogin = {
+      mode: "account",
+      expiresAt: Date.now() + ROUTER_LOGIN_ATTEMPT_TTL_MS,
+    };
+    window.sessionStorage.setItem(ROUTER_LOGIN_ATTEMPT_KEY, JSON.stringify(pending));
+  } catch {
+    // Private browsing or a restrictive captive browser can disable storage.
+    // The authentication handoff still works; only the return-state recovery is skipped.
+  }
+}
+
+function clearPendingRouterLogin() {
+  try {
+    window.sessionStorage.removeItem(ROUTER_LOGIN_ATTEMPT_KEY);
+  } catch {
+    // Nothing to clean up when storage is unavailable.
+  }
+}
+
 function isValidMac(val: string): boolean {
   if (!val || typeof val !== "string") return false;
   try {
@@ -267,8 +312,16 @@ function DeviceIdentity({ mac }: { mac: string }) {
   return <p className="text-xs text-muted-foreground">Thiết bị: <span className="font-mono font-medium text-foreground">{formatMacAddress(mac)}</span></p>;
 }
 
-function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () => void }) {
-  const [notice, setNotice] = useState<Notice | null>(null);
+function AccountLogin({ context, onBack, returnedFromRouter }: {
+  context: PortalContext;
+  onBack: () => void;
+  returnedFromRouter: boolean;
+}) {
+  const [notice, setNotice] = useState<Notice | null>(() => returnedFromRouter ? {
+    title: "Router chưa xác thực được thiết bị",
+    message: "Tài khoản đã được kiểm tra nhưng router không hoàn tất đăng nhập. Vui lòng thử lại.",
+    variant: "destructive",
+  } : null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submitLocalLogin(event: FormEvent<HTMLFormElement>) {
@@ -304,6 +357,7 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
       }
 
       // Hand off to router
+      if (context.routerUrl) rememberRouterLoginAttempt();
       postLoginToRouter(context);
 
       window.setTimeout(() => {
@@ -374,9 +428,11 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
 
 function PortalLogin() {
   const [context, setContext] = useState<PortalContext>(() => readPortalContext());
+  const [pendingRouterLogin] = useState(() => readPendingRouterLogin());
   const [view, setView] = useState<"choice" | "account" | "packages" | "success">(() => {
     const mode = new URLSearchParams(window.location.search).get("mode");
-    return mode === "account" ? "account" : mode === "packages" ? "packages" : mode === "success" ? "success" : "choice";
+    if (mode === "account" || pendingRouterLogin?.mode === "account") return "account";
+    return mode === "packages" ? "packages" : mode === "success" ? "success" : "choice";
   });
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -384,6 +440,10 @@ function PortalLogin() {
   const [selectedPackage, setSelectedPackage] = useState<number | null>(null);
   const [connectedPackage, setConnectedPackage] = useState<any | null>(null);
   const [loadingPackages, setLoadingPackages] = useState(false);
+
+  useEffect(() => {
+    if (pendingRouterLogin) clearPendingRouterLogin();
+  }, [pendingRouterLogin]);
 
   useEffect(() => {
     if (!context.mac) {
@@ -554,7 +614,7 @@ function PortalLogin() {
           </CardFooter>
         </Card>
       ) : view === "account" ? (
-        <AccountLogin context={context} onBack={showChoice} />
+        <AccountLogin context={context} onBack={showChoice} returnedFromRouter={Boolean(pendingRouterLogin)} />
       ) : view === "packages" ? (
         <Card className="w-full min-w-0">
           <CardHeader>
@@ -675,6 +735,10 @@ function PortalLogin() {
 
 function SuccessScreen() {
   const context = readPortalContext();
+
+  useEffect(() => {
+    clearPendingRouterLogin();
+  }, []);
 
   function finish() {
     if (context.destination && context.destination.startsWith("http")) {
