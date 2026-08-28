@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 
-mkdir -p /etc/freeradius/3.0/clients.d
-client_file=/etc/freeradius/3.0/clients.d/portal-nas.conf
+# Debian's stock clients.conf does not automatically include clients.d. Replace
+# the container-local client list at boot so every RADIUS_CLIENTS entry is
+# actually loaded by FreeRADIUS.
+client_file=/etc/freeradius/3.0/clients.conf
 : > "$client_file"
 old_ifs=$IFS
 IFS=,

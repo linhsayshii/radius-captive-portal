@@ -7,6 +7,7 @@ sql {
   password = "$ENV{RADIUS_DB_PASSWORD}"
   database = "$ENV{RADIUS_DB_NAME}"
   read_clients = no
+  sql_user_name = "%{User-Name}"
   group_attribute = "SQL-Group"
   authorize_check_query = "SELECT c.id, c.username, c.attribute, c.value, c.op FROM radcheck c INNER JOIN radius_authorizations a ON a.mac_address = c.username WHERE c.username = '%{SQL-User-Name}' AND a.expires_at > UTC_TIMESTAMP() ORDER BY c.id"
   authorize_reply_query = "SELECT r.id, r.username, r.attribute, r.value, r.op FROM radreply r INNER JOIN radius_authorizations a ON a.mac_address = r.username WHERE r.username = '%{SQL-User-Name}' AND a.expires_at > UTC_TIMESTAMP() ORDER BY r.id"
