@@ -138,14 +138,41 @@ router.post('/connect', async (req, res) => {
       mac_address: macAddress,
       ip_address: req.ip,
       action: 'guest_connect',
-      nas_identifier: null,
+      nas_identifier: req.body.switch_ip || null,
       details: JSON.stringify({
         user_agent: req.headers['user-agent'],
         package_id: packageId,
+        switch_ip: req.body.switch_ip,
+        router_url: req.body.router_url,
       }),
     });
 
-    logger.info('Guest connected', { macAddress, ip: req.ip, packageId });
+    logger.info('Guest connected', {
+      macAddress,
+      ip: req.ip,
+      packageId,
+      switchIp: req.body.switch_ip || null,
+      referer: req.headers.referer || null,
+    });
+
+    // Send RADIUS Disconnect-Request (RFC 3576 port 3799) to NAS to kick/re-evaluate pre-auth state
+    try {
+      const { disconnectSession } = require('../../services/radiusClient');
+      const { loadConfig } = require('../../config');
+      const runtimeConfig = loadConfig();
+      const targetNasIps = req.body.switch_ip
+        ? [req.body.switch_ip, ...runtimeConfig.radiusClients]
+        : runtimeConfig.radiusClients;
+
+      const uniqueNasIps = [...new Set(targetNasIps.filter((ip) => ip && ip !== '0.0.0.0' && !ip.includes('/')))];
+      for (const nasIp of uniqueNasIps) {
+        disconnectSession({
+          macAddress: macAddress,
+          username: macAddress,
+          nasIp: nasIp,
+        }).catch((err) => logger.debug('DynAuth notification to NAS ignored:', err.message));
+      }
+    } catch (_) {}
 
     res.json({
       success: true,

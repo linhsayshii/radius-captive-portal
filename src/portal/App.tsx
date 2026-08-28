@@ -430,12 +430,15 @@ function PortalLogin() {
     setIsConnecting(true);
 
     try {
+      const params = new URLSearchParams(window.location.search);
       const response = await fetch("/api/guest/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mac_address: context.mac || undefined,
           package_id: selectedPackage,
+          switch_ip: params.get("switchip") || params.get("switch_ip") || undefined,
+          router_url: context.routerUrl || undefined,
         }),
       });
       const payload = await response.json();
@@ -447,16 +450,13 @@ function PortalLogin() {
       const activeMac = payload.mac_address || context.mac;
       postLoginToRouter({ ...context, mac: activeMac });
 
+      // Fallback: If browser didn't navigate from form submit within 4s, navigate to success/destination
       window.setTimeout(() => {
-        setNotice({
-          title: "Aruba chưa hoàn tất xác thực",
-          message: context.routerUrl
-            ? "Máy chủ đã cấp quyền MAC nhưng Aruba chưa phản hồi. Kiểm tra cấu hình RADIUS và thử lại."
-            : "Máy chủ đã cấp quyền MAC nhưng URL captive portal thiếu switchip. Trên Aruba, đặt URL là /?mac=%m&switchip=%s&url=%u.",
-          variant: "destructive",
-        });
-        setIsConnecting(false);
-      }, 8000);
+        const dest = context.destination && context.destination.startsWith("http")
+          ? context.destination
+          : "/success.html";
+        window.location.assign(dest);
+      }, 4000);
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",
