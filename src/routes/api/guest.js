@@ -69,24 +69,37 @@ router.post('/connect', async (req, res) => {
 
     // Resolve package details if a package was selected
     const { packages } = require('../../db');
-    const packageId = req.body.package_id ? parseInt(req.body.package_id) : null;
+    let packageId = req.body.package_id ? parseInt(req.body.package_id) : null;
     let packageDetails = null;
     let durationMs = 24 * 60 * 60 * 1000; // default 24h
 
+    let pkg = null;
     if (packageId) {
-      const pkg = packages.getById.get(packageId);
+      pkg = packages.getById.get(packageId);
       if (!pkg) {
         return res.status(400).json({ error: 'Gói cước không tồn tại.' });
       }
       if (!pkg.is_active) {
         return res.status(400).json({ error: 'Gói cước đã bị vô hiệu hóa.' });
       }
+    } else {
+      // Fallback to the first active package if available
+      const activePackages = packages.getActive.all();
+      if (activePackages.length > 0) {
+        pkg = activePackages[0];
+        packageId = pkg.id;
+      }
+    }
+
+    if (pkg) {
       packageDetails = {
         package_id: pkg.id,
+        name: pkg.name,
         bandwidth_down_kbps: pkg.bandwidth_down_kbps,
         bandwidth_up_kbps: pkg.bandwidth_up_kbps,
         quota_mb: pkg.quota_mb,
         max_devices: pkg.max_devices,
+        duration_minutes: pkg.duration_minutes,
       };
       durationMs = pkg.duration_minutes * 60 * 1000;
     }

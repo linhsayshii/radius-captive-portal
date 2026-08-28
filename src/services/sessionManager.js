@@ -52,6 +52,11 @@ async function checkIdleSessions() {
         if (pkg?.duration_minutes) {
           maxDurationSeconds = pkg.duration_minutes * 60;
         }
+      } else if (session.user_id) {
+        const user = users.getById.get(session.user_id);
+        if (user) {
+          maxDurationSeconds = getAccessPolicy(user).durationSeconds;
+        }
       }
 
       // Check if session expired by duration
@@ -90,6 +95,12 @@ async function checkIdleSessions() {
     // Remove stale authorizations only after active sessions have had a chance
     // to observe the expiry and issue a Disconnect-Request to their NAS.
     macAuthorizations.deleteExpired.run();
+    try {
+      const { macWhitelist } = require('../routes/api/guest');
+      for (const [mac, data] of macWhitelist.entries()) {
+        if (new Date(data.expires_at) <= new Date()) macWhitelist.delete(mac);
+      }
+    } catch (_) {}
   } catch (err) {
     logger.error('Error during checkIdleSessions:', err);
   }
@@ -117,13 +128,17 @@ async function terminateSession(session, reason, { allowLocalTermination = false
       disconnect = { attempted: true, ...result };
       if (!result.success) {
         logger.warn(`Disconnect-Request to router ${nasIp} for session ${session.session_id} returned: ${result.error}`);
-        return { success: false, error: result.error || 'Router không xác nhận lệnh ngắt kết nối', disconnect };
+        if (!allowLocalTermination) {
+          return { success: false, error: result.error || 'Router không xác nhận lệnh ngắt kết nối', disconnect };
+        }
       } else {
         logger.info(`Successfully sent Disconnect-Request to router ${nasIp} for session ${session.session_id}`);
       }
     } catch (err) {
       logger.error(`Failed to send Disconnect-Request to router ${nasIp}:`, err);
-      return { success: false, error: err.message, disconnect };
+      if (!allowLocalTermination) {
+        return { success: false, error: err.message, disconnect };
+      }
     }
   } else if (!allowLocalTermination) {
     return { success: false, error: 'Không có địa chỉ NAS hợp lệ để ngắt thiết bị', disconnect };
@@ -138,10 +153,17 @@ async function terminateSession(session, reason, { allowLocalTermination = false
 
   if (session.mac_address) {
     devices.setOffline.run(session.mac_address);
+    try {
+      const { macWhitelist } = require('../routes/api/guest');
+      macWhitelist.delete(session.mac_address);
+    } catch (_) {}
+    if (['duration_expired', 'quota_exceeded', 'mac_auth_expired', 'admin_revoked_mac', 'admin_test_kick'].includes(reason)) {
+      macAuthorizations.delete.run(session.mac_address);
+    }
   }
 
   removeLiveMetric(session.session_id);
-  return { success: true, disconnect, localOnly: !disconnect.attempted };
+  return { success: true, disconnect, localOnly: !disconnect.attempted || !disconnect.success };
 }
 
 async function handleNewConnection(userId, macAddress, nasIp) {

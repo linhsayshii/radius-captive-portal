@@ -22,14 +22,27 @@ const ATTR_CALLING_STATION_ID = 31;
 const ATTR_ACCT_SESSION_ID = 44;
 const ATTR_VENDOR_SPECIFIC = 26;
 
-// Vendor IDs
-const VENDOR_MIKROTIK = 14988;
-const MIKROTIK_RATE_LIMIT = 1;
+// Vendor IDs & Attributes
+const VENDOR_CISCO = 9;
+const CISCO_AVPAIR = 1;
 
 const VENDOR_WISPR = 14122;
 const WISPR_BANDWIDTH_MAX_DOWN = 7;
 const WISPR_BANDWIDTH_MAX_UP = 8;
 const WISPR_QUOTA_LIMIT = 9;
+
+const VENDOR_CHILLISPOT = 14559;
+const CHILLISPOT_MAX_TOTAL_OCTETS = 3;
+const CHILLISPOT_BANDWIDTH_MAX_UP = 4;
+const CHILLISPOT_BANDWIDTH_MAX_DOWN = 5;
+
+const VENDOR_ARUBA = 14823;
+const ARUBA_BANDWIDTH_MAX_UP = 7;
+const ARUBA_BANDWIDTH_MAX_DOWN = 8;
+
+const VENDOR_MIKROTIK = 14988;
+const MIKROTIK_RATE_LIMIT = 1;
+const MIKROTIK_TOTAL_LIMIT = 17;
 
 // Lazy-load config
 function getConfig() {
@@ -111,6 +124,24 @@ function buildAttributeBuffers(attrs) {
       case 'MikroTik-Rate-Limit':
         buffers.push(buildVsa(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, Buffer.from(String(value), 'utf8')));
         continue;
+      case 'MikroTik-Total-Limit': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_MIKROTIK, MIKROTIK_TOTAL_LIMIT, buf));
+        continue;
+      }
+      case 'Aruba-Bandwidth-Max-Down': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_DOWN, buf));
+        continue;
+      }
+      case 'Aruba-Bandwidth-Max-Up': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_UP, buf));
+        continue;
+      }
       case 'WISPr-Bandwidth-Max-Down': {
         const buf = Buffer.alloc(4);
         buf.writeUInt32BE(Number(value) >>> 0, 0);
@@ -129,6 +160,27 @@ function buildAttributeBuffers(attrs) {
         buffers.push(buildVsa(VENDOR_WISPR, WISPR_QUOTA_LIMIT, buf));
         continue;
       }
+      case 'ChilliSpot-Bandwidth-Max-Down': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_CHILLISPOT, CHILLISPOT_BANDWIDTH_MAX_DOWN, buf));
+        continue;
+      }
+      case 'ChilliSpot-Bandwidth-Max-Up': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_CHILLISPOT, CHILLISPOT_BANDWIDTH_MAX_UP, buf));
+        continue;
+      }
+      case 'ChilliSpot-Max-Total-Octets': {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(Number(value) >>> 0, 0);
+        buffers.push(buildVsa(VENDOR_CHILLISPOT, CHILLISPOT_MAX_TOTAL_OCTETS, buf));
+        continue;
+      }
+      case 'Cisco-AVPair':
+        buffers.push(buildVsa(VENDOR_CISCO, CISCO_AVPAIR, Buffer.from(String(value), 'utf8')));
+        continue;
       default:
         continue;
     }
@@ -316,8 +368,13 @@ async function changeBandwidth(sessionId, nasIp, downKbps, upKbps, macAddress) {
   const attrs = {
     'Acct-Session-Id': sessionId,
     'MikroTik-Rate-Limit': `${upKbps}k/${downKbps}k`,
+    'Aruba-Bandwidth-Max-Down': downKbps,
+    'Aruba-Bandwidth-Max-Up': upKbps,
     'WISPr-Bandwidth-Max-Down': downKbps * 1000,
     'WISPr-Bandwidth-Max-Up': upKbps * 1000,
+    'ChilliSpot-Bandwidth-Max-Down': downKbps * 1000,
+    'ChilliSpot-Bandwidth-Max-Up': upKbps * 1000,
+    'Cisco-AVPair': `subscriber:bandwidth-downstream-kbps=${downKbps}`,
   };
   if (macAddress) attrs['Calling-Station-Id'] = macAddress;
   return sendCoA(nasIp, attrs);
@@ -327,9 +384,12 @@ async function changeBandwidth(sessionId, nasIp, downKbps, upKbps, macAddress) {
  * Apply session quota limit
  */
 async function applyQuota(sessionId, nasIp, quotaMb, macAddress) {
+  const quotaBytes = quotaMb * 1024 * 1024;
   const attrs = {
     'Acct-Session-Id': sessionId,
+    'MikroTik-Total-Limit': quotaBytes,
     'WISPr-Quota-Limit': quotaMb * 1024,
+    'ChilliSpot-Max-Total-Octets': quotaBytes,
   };
   if (macAddress) attrs['Calling-Station-Id'] = macAddress;
   return sendCoA(nasIp, attrs);

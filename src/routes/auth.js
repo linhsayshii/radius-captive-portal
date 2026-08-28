@@ -112,11 +112,17 @@ router.post('/local', async (req, res) => {
       if (!mac) {
         return res.status(400).json({ error: 'Invalid MAC address' });
       }
+      const policy = getAccessPolicy(user);
       authorization = authorizeMac(mac, {
         user_id: user.id,
         username: user.identifier,
         access_type: 'account',
-      }, getAuthorizationDurationMs(user));
+        package_id: policy.packageId,
+        bandwidth_down_kbps: policy.downKbps,
+        bandwidth_up_kbps: policy.upKbps,
+        quota_mb: policy.quotaTotalMb,
+        max_devices: policy.maxDevices,
+      }, policy.durationSeconds * 1000);
     }
 
     res.json({

@@ -233,7 +233,44 @@ async function runTests() {
   ]);
   assert.strictEqual(acceptResp.code, 2, 'Must receive Access-Accept (code 2)');
   assert.strictEqual(acceptResp.id, 101);
-  console.log('✅ Live UDP Access-Accept received successfully');
+
+  // Verify Session-Timeout (27)
+  const sessionTimeout = acceptResp.attributes[27][0].readUInt32BE(0);
+  assert(sessionTimeout > 7100 && sessionTimeout <= 7200, `Session-Timeout should be ~7200s, got ${sessionTimeout}`);
+
+  // Verify Termination-Action (29)
+  const termAction = acceptResp.attributes[29][0].readUInt32BE(0);
+  assert.strictEqual(termAction, 0, 'Termination-Action must be 0');
+
+  // Verify Acct-Interim-Interval (85)
+  const interimInterval = acceptResp.attributes[85][0].readUInt32BE(0);
+  assert.strictEqual(interimInterval, 60, 'Acct-Interim-Interval must be 60');
+
+  // Verify Vendor-Specific Attributes (26)
+  const vsas = acceptResp.attributes[26] || [];
+  assert(vsas.length >= 5, `Expected at least 5 VSAs (MikroTik, Aruba, WISPr, ChilliSpot, Cisco), got ${vsas.length}`);
+
+  // Check MikroTik VSA (Vendor 14988)
+  const mikrotikVsa = vsas.find(buf => buf.readUInt32BE(0) === 14988);
+  assert(mikrotikVsa !== undefined, 'MikroTik VSA must be present');
+  const mikrotikStr = mikrotikVsa.subarray(6).toString('utf8');
+  assert.strictEqual(mikrotikStr, '6000k/12000k', 'MikroTik rate limit must match 6000k/12000k');
+
+  // Check Aruba VSA (Vendor 14823)
+  const arubaVsaDown = vsas.find(buf => buf.readUInt32BE(0) === 14823 && buf.readUInt8(4) === 8);
+  assert(arubaVsaDown !== undefined, 'Aruba Downstream VSA must be present');
+  assert.strictEqual(arubaVsaDown.readUInt32BE(6), 12000, 'Aruba Downstream must be 12000 Kbps');
+
+  const arubaVsaUp = vsas.find(buf => buf.readUInt32BE(0) === 14823 && buf.readUInt8(4) === 7);
+  assert(arubaVsaUp !== undefined, 'Aruba Upstream VSA must be present');
+  assert.strictEqual(arubaVsaUp.readUInt32BE(6), 6000, 'Aruba Upstream must be 6000 Kbps');
+
+  // Check WISPr VSA (Vendor 14122)
+  const wisprVsaDown = vsas.find(buf => buf.readUInt32BE(0) === 14122 && buf.readUInt8(4) === 7);
+  assert(wisprVsaDown !== undefined, 'WISPr Downstream VSA must be present');
+  assert.strictEqual(wisprVsaDown.readUInt32BE(6), 12000000, 'WISPr Downstream must be 12000000 bps');
+
+  console.log('✅ Live UDP Access-Accept with Multi-Vendor Rate Limits & Session-Timeout received successfully');
 
   // 10b. Unauthorized MAC Access-Request -> Access-Reject
   const rejectResp = await sendRadiusPacket(1, 102, [

@@ -27,6 +27,7 @@ const ATTR_REPLY_MESSAGE = 18;
 const ATTR_VENDOR_SPECIFIC = 26;
 const ATTR_SESSION_TIMEOUT = 27;
 const ATTR_IDLE_TIMEOUT = 28;
+const ATTR_TERMINATION_ACTION = 29;
 const ATTR_CALLING_STATION_ID = 31;
 const ATTR_ACCT_STATUS_TYPE = 40;
 const ATTR_ACCT_INPUT_OCTETS = 42;
@@ -34,14 +35,30 @@ const ATTR_ACCT_OUTPUT_OCTETS = 43;
 const ATTR_ACCT_SESSION_ID = 44;
 const ATTR_ACCT_SESSION_TIME = 46;
 const ATTR_ACCT_TERMINATE_CAUSE = 49;
+const ATTR_ACCT_INTERIM_INTERVAL = 85;
 
-// Vendor IDs
-const VENDOR_MIKROTIK = 14988;
-const MIKROTIK_RATE_LIMIT = 1;
+// Vendor IDs & Attributes
+const VENDOR_CISCO = 9;
+const CISCO_AVPAIR = 1;
 
 const VENDOR_WISPR = 14122;
 const WISPR_BANDWIDTH_MAX_DOWN = 7;
 const WISPR_BANDWIDTH_MAX_UP = 8;
+const WISPR_QUOTA_LIMIT = 9;
+
+const VENDOR_CHILLISPOT = 14559;
+const CHILLISPOT_MAX_TOTAL_OCTETS = 3;
+const CHILLISPOT_BANDWIDTH_MAX_UP = 4;
+const CHILLISPOT_BANDWIDTH_MAX_DOWN = 5;
+
+const VENDOR_ARUBA = 14823;
+const ARUBA_USER_ROLE = 1;
+const ARUBA_BANDWIDTH_MAX_UP = 7;
+const ARUBA_BANDWIDTH_MAX_DOWN = 8;
+
+const VENDOR_MIKROTIK = 14988;
+const MIKROTIK_RATE_LIMIT = 1;
+const MIKROTIK_TOTAL_LIMIT = 17;
 
 // Accounting status types
 const ACCT_STATUS_START = 1;
@@ -224,27 +241,59 @@ function decodeUserPassword(encrypted, requestAuthenticator) {
 
 function buildAccessAccept(packet, user, secondsRemaining, message, authEntry = null) {
   let downKbps = 5000, upKbps = 2000;
+  let quotaMb = null;
 
   if (authEntry?.bandwidth_down_kbps && authEntry?.bandwidth_up_kbps) {
     downKbps = Number(authEntry.bandwidth_down_kbps);
     upKbps = Number(authEntry.bandwidth_up_kbps);
+    if (authEntry.quota_mb) {
+      quotaMb = Number(authEntry.quota_mb);
+    }
   } else if (user) {
     const policy = getAccessPolicy(user);
     downKbps = policy.downKbps;
     upKbps = policy.upKbps;
+    quotaMb = policy.quotaTotalMb;
   }
 
-  const sessionTimeout = Math.max(1, Math.min(secondsRemaining, 86400));
+  const sessionTimeout = Math.max(1, Math.min(secondsRemaining, 0xFFFFFFFF));
+
+  const vsas = [
+    // 1. MikroTik Rate Limit: rx/tx (Upload/Download)
+    buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
+
+    // 2. Aruba Instant AP / Virtual Controller (Kbps)
+    buildVsaBuffer(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_DOWN, uint32(downKbps)),
+    buildVsaBuffer(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_UP, uint32(upKbps)),
+
+    // 3. WISPr standard (bits per second)
+    buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
+    buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
+
+    // 4. ChilliSpot / CoovaChilli (bits per second)
+    buildVsaBuffer(VENDOR_CHILLISPOT, CHILLISPOT_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
+    buildVsaBuffer(VENDOR_CHILLISPOT, CHILLISPOT_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
+
+    // 5. Cisco AVPair (downstream/upstream kbps)
+    buildVsaBuffer(VENDOR_CISCO, CISCO_AVPAIR, `subscriber:bandwidth-downstream-kbps=${downKbps}`),
+    buildVsaBuffer(VENDOR_CISCO, CISCO_AVPAIR, `subscriber:bandwidth-upstream-kbps=${upKbps}`),
+  ];
+
+  // Optional quota limit VSAs if quota_mb is set
+  if (quotaMb && quotaMb > 0) {
+    const quotaBytes = quotaMb * 1024 * 1024;
+    vsas.push(buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_TOTAL_LIMIT, uint32(quotaBytes)));
+    vsas.push(buildVsaBuffer(VENDOR_CHILLISPOT, CHILLISPOT_MAX_TOTAL_OCTETS, uint32(quotaBytes)));
+    vsas.push(buildVsaBuffer(VENDOR_WISPR, WISPR_QUOTA_LIMIT, uint32(quotaMb * 1024))); // in KB
+  }
 
   return buildResponse(PACKET_ACCESS_ACCEPT, packet.id, packet.authenticator, {
     [ATTR_SESSION_TIMEOUT]: [uint32(sessionTimeout)],
     [ATTR_IDLE_TIMEOUT]: [uint32(300)],
+    [ATTR_TERMINATION_ACTION]: [uint32(0)], // 0 = default terminate session on timeout
+    [ATTR_ACCT_INTERIM_INTERVAL]: [uint32(60)], // Request accounting update every 60 seconds
     [ATTR_REPLY_MESSAGE]: [Buffer.from(message)],
-    [ATTR_VENDOR_SPECIFIC]: [
-      buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
-      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
-      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
-    ],
+    [ATTR_VENDOR_SPECIFIC]: vsas,
   });
 }
 
@@ -382,6 +431,19 @@ async function handleAccountingRequest(packet, rinfo) {
         ? Number(authEntry.quota_mb)
         : (user ? getAccessPolicy(user).quotaTotalMb : null);
 
+      // Deactivate any previous active session for this MAC to prevent duplicate/stale active sessions
+      if (normalizedMac && normalizedMac !== 'unknown') {
+        const oldActive = sessions.getActiveByMac.get(normalizedMac, normalizedMac);
+        if (oldActive && oldActive.session_id !== sessionId) {
+          sessions.update.run({
+            ...oldActive,
+            is_active: 0,
+            terminated_by: 'replaced_by_new_session',
+            end_time: new Date().toISOString(),
+          });
+        }
+      }
+
       // Check if session already exists
       const existingSession = sessions.getBySessionId.get(sessionId);
       if (!existingSession) {
@@ -443,6 +505,8 @@ async function handleAccountingRequest(packet, rinfo) {
           framedIp,
           downKbps,
           upKbps,
+          quotaTotalMb,
+          packageId,
         }),
       });
     } catch (err) {
@@ -454,6 +518,13 @@ async function handleAccountingRequest(packet, rinfo) {
 
       const session = sessions.getBySessionId.get(sessionId);
       if (session) {
+        // Enforce quota limit on interim updates
+        if (session.quota_total_mb && session.quota_used_mb >= session.quota_total_mb) {
+          logger.info(`Session ${sessionId} exceeded quota (${session.quota_used_mb}MB / ${session.quota_total_mb}MB) during interim update, terminating...`);
+          const { terminateSession } = require('./sessionManager');
+          void terminateSession(session, 'quota_exceeded', { allowLocalTermination: true });
+        }
+
         logs.create.run({
           user_id: session.user_id,
           session_id: sessionId,
@@ -461,7 +532,7 @@ async function handleAccountingRequest(packet, rinfo) {
           ip_address: framedIp || nasIp,
           action: 'update',
           nas_identifier: nasIp,
-          details: JSON.stringify({ inputOctets, outputOctets }),
+          details: JSON.stringify({ inputOctets, outputOctets, quotaUsedMb: session.quota_used_mb }),
         });
       }
     } catch (err) {

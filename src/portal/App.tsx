@@ -532,7 +532,7 @@ function PortalLogin() {
           </CardContent>
           <CardFooter>
             <p className="text-xs text-muted-foreground text-center w-full">
-              Hệ thống đang tự động chuyển hướng vào Internet...
+              Bấm nút &quot;Bắt đầu lướt web&quot; để trải nghiệm dịch vụ Internet.
             </p>
           </CardFooter>
         </Card>

@@ -180,13 +180,20 @@ router.get('/google/callback', (req, res, next) => {
     req.session.userType = 'oauth';
 
     if (context.mac) {
+      const user = users.getById.get(req.user.id);
+      const policy = getAccessPolicy(user);
       const authorization = authorizeMac(context.mac, {
         access_type: 'oauth',
         ip_address: req.ip,
         user_agent: req.headers['user-agent'],
         user_id: req.user.id,
         username: req.user.email,
-      }, getAuthorizationDurationMs(users.getById.get(req.user.id)));
+        package_id: policy.packageId,
+        bandwidth_down_kbps: policy.downKbps,
+        bandwidth_up_kbps: policy.upKbps,
+        quota_mb: policy.quotaTotalMb,
+        max_devices: policy.maxDevices,
+      }, policy.durationSeconds * 1000);
 
       // Log successful connection
       try {
