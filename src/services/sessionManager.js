@@ -198,6 +198,16 @@ async function handleNewConnection(userId, macAddress, nasIp) {
 // In-memory store for live session metrics
 const liveMetrics = new Map();
 
+// RADIUS Accounting direction is relative to the NAS: Input is client → NAS
+// (upload) and Output is NAS → client (download).
+function calculateAccountingRates(inputDelta, outputDelta, elapsedSec) {
+  const seconds = Math.max(1, elapsedSec);
+  return {
+    rateDownKbps: Math.round((Math.max(0, outputDelta) * 8) / (seconds * 1024)),
+    rateUpKbps: Math.round((Math.max(0, inputDelta) * 8) / (seconds * 1024)),
+  };
+}
+
 function updateSessionActivity(sessionId, inputOctets, outputOctets) {
   const session = sessions.getBySessionId.get(sessionId);
   if (!session) return;
@@ -223,8 +233,7 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
     bytesChanged = inDelta + outDelta >= ACTIVITY_THRESHOLD;
 
     if (inDelta > 0 || outDelta > 0) {
-      rateDownKbps = Math.round((inDelta * 8) / (elapsedSec * 1024));
-      rateUpKbps = Math.round((outDelta * 8) / (elapsedSec * 1024));
+      ({ rateDownKbps, rateUpKbps } = calculateAccountingRates(inDelta, outDelta, elapsedSec));
       metric.lastInputOctets = inputOctets;
       metric.lastOutputOctets = outputOctets;
       metric.lastTimestamp = now;
@@ -336,4 +345,5 @@ module.exports = {
   getTotalLiveBandwidth,
   removeLiveMetric,
   toTimestampMs,
+  calculateAccountingRates,
 };

@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 
 import { ApiError, apiRequest } from "./api";
+import { formatMacAddress } from "@/lib/utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -692,12 +693,12 @@ function AdminApp() {
               await loadData(true);
               toast.add({ title: "Đã ngắt phiên kết nối", type: "success" });
             })} /> : null}
-            {view === "devices" ? <DevicesView devices={data.devices} isLoading={isLoading} onDisconnect={(device) => queueAction("Ngắt thiết bị?", `Thiết bị ${device.mac_address} sẽ bị đưa về trạng thái ngoại tuyến.`, async () => {
+            {view === "devices" ? <DevicesView devices={data.devices} isLoading={isLoading} onDisconnect={(device) => queueAction("Ngắt thiết bị?", `Thiết bị ${formatMacAddress(device.mac_address)} sẽ bị đưa về trạng thái ngoại tuyến.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/devices/${encodeURIComponent(device.mac_address)}`, { method: "DELETE" });
               await loadData(true);
               toast.add({ title: "Đã ngắt thiết bị", type: "success" });
             })} /> : null}
-            {view === "access" ? <AccessView entries={data.macAuthorizations} isLoading={isLoading} onRevoke={(entry) => queueAction("Thu hồi quyền MAC?", `Thiết bị ${entry.mac} sẽ không thể truy cập khi gửi yêu cầu RADIUS kế tiếp.`, async () => {
+            {view === "access" ? <AccessView entries={data.macAuthorizations} isLoading={isLoading} onRevoke={(entry) => queueAction("Thu hồi quyền MAC?", `Thiết bị ${formatMacAddress(entry.mac)} sẽ không thể truy cập khi gửi yêu cầu RADIUS kế tiếp.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/guest/whitelist/${encodeURIComponent(entry.mac)}`, { method: "DELETE" });
               await loadData(true);
               toast.add({ title: "Đã thu hồi quyền MAC", type: "success" });
@@ -882,7 +883,7 @@ function SessionTable({ sessions, onTerminate }: { sessions: Session[]; onTermin
         {sessions.map((session) => (
           <TableRow key={session.id}>
             <TableCell className="font-medium">{session.username}</TableCell>
-            <TableCell className="font-mono text-xs">{session.mac_address}</TableCell>
+            <TableCell className="font-mono text-xs">{formatMacAddress(session.mac_address)}</TableCell>
             <TableCell>
               <LiveSpeedBadge downKbps={session.live_down_kbps} upKbps={session.live_up_kbps} />
             </TableCell>
@@ -933,11 +934,11 @@ function SessionsView({ sessions, accounting, isLoading, onTerminate }: { sessio
 }
 
 function DevicesView({ devices, isLoading, onDisconnect }: { devices: Device[]; isLoading: boolean; onDisconnect: (device: Device) => void }) {
-  return <Card><CardHeader><CardTitle>Thiết bị đã nhận diện</CardTitle><CardDescription>Ngắt thiết bị đang trực tuyến để kết thúc quyền truy cập hiện tại.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : devices.length ? <Table><TableCaption className="sr-only">Danh sách thiết bị.</TableCaption><TableHeader><TableRow><TableHead>MAC</TableHead><TableHead>Người dùng</TableHead><TableHead>Trạng thái</TableHead><TableHead>Hoạt động cuối</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{devices.map((device) => <TableRow key={device.mac_address}><TableCell className="font-mono text-xs">{device.mac_address}</TableCell><TableCell>{device.username || "Chưa gán"}</TableCell><TableCell><Badge variant={isActive(device.is_online) ? "secondary" : "outline"}>{isActive(device.is_online) ? "Trực tuyến" : "Ngoại tuyến"}</Badge></TableCell><TableCell>{formatDate(device.last_seen)}</TableCell><TableCell>{isActive(device.is_online) ? <Button variant="destructive" size="sm" onClick={() => onDisconnect(device)}>Ngắt thiết bị</Button> : "-"}</TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa có thiết bị" description="Thiết bị xuất hiện sau lần kết nối đầu tiên." />}</CardContent></Card>;
+  return <Card><CardHeader><CardTitle>Thiết bị đã nhận diện</CardTitle><CardDescription>Ngắt thiết bị đang trực tuyến để kết thúc quyền truy cập hiện tại.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : devices.length ? <Table><TableCaption className="sr-only">Danh sách thiết bị.</TableCaption><TableHeader><TableRow><TableHead>MAC</TableHead><TableHead>Người dùng</TableHead><TableHead>Trạng thái</TableHead><TableHead>Hoạt động cuối</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{devices.map((device) => <TableRow key={device.mac_address}><TableCell className="font-mono text-xs">{formatMacAddress(device.mac_address)}</TableCell><TableCell>{device.username || "Chưa gán"}</TableCell><TableCell><Badge variant={isActive(device.is_online) ? "secondary" : "outline"}>{isActive(device.is_online) ? "Trực tuyến" : "Ngoại tuyến"}</Badge></TableCell><TableCell>{formatDate(device.last_seen)}</TableCell><TableCell>{isActive(device.is_online) ? <Button variant="destructive" size="sm" onClick={() => onDisconnect(device)}>Ngắt thiết bị</Button> : "-"}</TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa có thiết bị" description="Thiết bị xuất hiện sau lần kết nối đầu tiên." />}</CardContent></Card>;
 }
 
 function AccessView({ entries, isLoading, onRevoke }: { entries: MacAuthorization[]; isLoading: boolean; onRevoke: (entry: MacAuthorization) => void }) {
-  return <Card><CardHeader><CardTitle>Quyền truy cập theo MAC</CardTitle><CardDescription>Quyền này tự hết hạn hoặc có thể bị thu hồi ngay tại đây.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : entries.length ? <Table><TableCaption className="sr-only">Danh sách quyền truy cập MAC.</TableCaption><TableHeader><TableRow><TableHead>MAC</TableHead><TableHead>Nguồn cấp</TableHead><TableHead>Tài khoản</TableHead><TableHead>Hết hạn</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{entries.map((entry) => <TableRow key={entry.mac}><TableCell className="font-mono text-xs">{entry.mac}</TableCell><TableCell><Badge variant="outline">{entry.access_type === "account" ? "Tài khoản" : "Truy cập nhanh"}</Badge></TableCell><TableCell>{entry.username || "Khách"}</TableCell><TableCell>{formatDate(entry.expires_at)}</TableCell><TableCell><Button variant="destructive" size="sm" onClick={() => onRevoke(entry)}>Thu hồi</Button></TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa cấp quyền MAC" description="Quyền sẽ xuất hiện sau khi khách truy cập nhanh hoặc xác thực tài khoản." />}</CardContent></Card>;
+  return <Card><CardHeader><CardTitle>Quyền truy cập theo MAC</CardTitle><CardDescription>Quyền này tự hết hạn hoặc có thể bị thu hồi ngay tại đây.</CardDescription></CardHeader><CardContent>{isLoading ? <Skeleton className="h-40 w-full" /> : entries.length ? <Table><TableCaption className="sr-only">Danh sách quyền truy cập MAC.</TableCaption><TableHeader><TableRow><TableHead>MAC</TableHead><TableHead>Nguồn cấp</TableHead><TableHead>Tài khoản</TableHead><TableHead>Hết hạn</TableHead><TableHead>Thao tác</TableHead></TableRow></TableHeader><TableBody>{entries.map((entry) => <TableRow key={entry.mac}><TableCell className="font-mono text-xs">{formatMacAddress(entry.mac)}</TableCell><TableCell><Badge variant="outline">{entry.access_type === "account" ? "Tài khoản" : "Truy cập nhanh"}</Badge></TableCell><TableCell>{entry.username || "Khách"}</TableCell><TableCell>{formatDate(entry.expires_at)}</TableCell><TableCell><Button variant="destructive" size="sm" onClick={() => onRevoke(entry)}>Thu hồi</Button></TableCell></TableRow>)}</TableBody></Table> : <NoRecords title="Chưa cấp quyền MAC" description="Quyền sẽ xuất hiện sau khi khách truy cập nhanh hoặc xác thực tài khoản." />}</CardContent></Card>;
 }
 
 function AccountsView({

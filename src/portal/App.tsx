@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { formatMacAddress } from "@/lib/utils";
 
 type PortalContext = {
   destination: string;
@@ -262,6 +263,11 @@ function NoticeAlert({ notice }: { notice: Notice | null }) {
   );
 }
 
+function DeviceIdentity({ mac }: { mac: string }) {
+  if (!mac) return null;
+  return <p className="text-xs text-muted-foreground">Thiết bị: <span className="font-mono font-medium text-foreground">{formatMacAddress(mac)}</span></p>;
+}
+
 function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () => void }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -338,6 +344,7 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <NoticeAlert notice={notice} />
+        <DeviceIdentity mac={context.mac} />
         <form onSubmit={submitLocalLogin} noValidate>
           <FieldGroup>
             <Field data-invalid={Boolean(notice)}>
@@ -515,6 +522,7 @@ function PortalLogin() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <DeviceIdentity mac={context.mac} />
             {connectedPackage ? (
               <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
                 <div className="font-semibold text-foreground text-base">
@@ -564,6 +572,7 @@ function PortalLogin() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <NoticeAlert notice={notice} />
+            <DeviceIdentity mac={context.mac} />
             {loadingPackages ? (
               <div className="flex justify-center py-8">
                 <Spinner />
@@ -638,6 +647,7 @@ function PortalLogin() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <NoticeAlert notice={notice} />
+            <DeviceIdentity mac={context.mac} />
             <Button size="lg" className="h-12 w-full text-base font-semibold" onClick={showPackages}>
               <SparklesIcon data-icon="inline-start" />
               Đăng nhập nhanh
@@ -687,6 +697,7 @@ function SuccessScreen() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <DeviceIdentity mac={context.mac} />
           <Button size="lg" className="h-12 w-full text-base font-semibold" onClick={finish}>
             Bắt đầu lướt web
           </Button>

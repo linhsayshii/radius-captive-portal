@@ -9,6 +9,7 @@ process.env.RADIUS_SHARED_SECRET = 'core-workflow-test-secret';
 
 const { db, macAuthorizations } = require('../src/db');
 const { getDevicesWithLiveStatus } = require('../src/services/deviceStatus');
+const { calculateAccountingRates } = require('../src/services/sessionManager');
 const {
   normalizeMac,
   authorizeMac,
@@ -20,6 +21,7 @@ const {
   buildRfc5176Packet,
   DISCONNECT_REQUEST,
   COA_REQUEST,
+  formatCallingStationId,
 } = require('../src/services/radiusClient');
 
 function readAttributes(packet) {
@@ -61,6 +63,9 @@ function testFreshDatabaseStartup() {
 }
 
 function testDynamicAuthorizationPackets() {
+  assert.strictEqual(formatCallingStationId('aabbccddeeff'), 'AA:BB:CC:DD:EE:FF');
+  assert.strictEqual(formatCallingStationId('aa-bb-cc-dd-ee-ff'), 'AA:BB:CC:DD:EE:FF');
+
   const disconnect = buildRfc5176Packet(DISCONNECT_REQUEST, 17, {
     'Acct-Session-Id': 'session-test-1',
     'User-Name': 'test-account',
@@ -70,6 +75,8 @@ function testDynamicAuthorizationPackets() {
   assert.strictEqual(disconnect.packet.readUInt8(1), 17);
   assert.strictEqual(disconnect.packet.readUInt16BE(2), disconnect.packet.length);
   assert(disconnect.packet.subarray(4, 20).equals(disconnect.requestAuth));
+  const callingStationId = readAttributes(disconnect.packet).find((attribute) => attribute.type === 31);
+  assert.strictEqual(callingStationId.value.toString('utf8'), 'AA:BB:CC:DD:EE:FF');
 
   const coa = buildRfc5176Packet(COA_REQUEST, 18, {
     'Acct-Session-Id': 'session-test-1',
@@ -105,11 +112,18 @@ function testDeviceStatusUsesActiveSession() {
   assert.strictEqual(device.last_seen, '2026-08-28T16:00:20.000Z');
 }
 
+function testAccountingDirection() {
+  const rates = calculateAccountingRates(1024, 4096, 1);
+  assert.strictEqual(rates.rateUpKbps, 8, 'Acct-Input-Octets must be displayed as upload');
+  assert.strictEqual(rates.rateDownKbps, 32, 'Acct-Output-Octets must be displayed as download');
+}
+
 try {
   testFreshDatabaseStartup();
   testMacAuthorization();
   testDynamicAuthorizationPackets();
   testDeviceStatusUsesActiveSession();
+  testAccountingDirection();
   console.log('Core portal/RADIUS workflow checks passed.');
 } finally {
   db.close();

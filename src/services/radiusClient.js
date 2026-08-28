@@ -60,6 +60,18 @@ function ipv4ToBuffer(ipStr) {
   return Buffer.from(parts);
 }
 
+// The portal stores MAC addresses in canonical separator-free form, while a
+// NAS can require the Calling-Station-Id format configured in its Hotspot
+// profile. MikroTik in this deployment uses XX:XX:XX:XX:XX:XX for Dynamic
+// Authorization matching, so normalize only valid MAC values at the RADIUS
+// boundary and leave non-MAC identifiers untouched.
+function formatCallingStationId(value) {
+  if (typeof value !== 'string') return value;
+  const normalized = value.replace(/[^0-9a-f]/gi, '');
+  if (!/^[0-9a-f]{12}$/i.test(normalized)) return value;
+  return normalized.match(/.{2}/g).join(':').toUpperCase();
+}
+
 function buildVsa(vendorId, vendorType, valueBuffer) {
   // Vendor-Specific Attribute (Type 26)
   // Format: Type(1) + Length(1) + Vendor-Id(4) + Vendor-Type(1) + Vendor-Length(1) + Value
@@ -99,7 +111,7 @@ function buildAttributeBuffers(attrs) {
         break;
       case 'Calling-Station-Id':
         type = ATTR_CALLING_STATION_ID;
-        valBuf = Buffer.from(String(value), 'utf8');
+        valBuf = Buffer.from(String(formatCallingStationId(value)), 'utf8');
         break;
       case 'NAS-IP-Address':
         type = ATTR_NAS_IP;
@@ -339,7 +351,7 @@ async function disconnectSession(target, legacyNasIp) {
       attrs['User-Name'] = target.username;
     }
     if (target.macAddress || target.mac_address) {
-      attrs['Calling-Station-Id'] = target.macAddress || target.mac_address;
+      attrs['Calling-Station-Id'] = formatCallingStationId(target.macAddress || target.mac_address);
     }
     if (target.ipAddress || target.ip_address) {
       attrs['Framed-IP-Address'] = target.ipAddress || target.ip_address;
@@ -376,7 +388,7 @@ async function changeBandwidth(sessionId, nasIp, downKbps, upKbps, macAddress) {
     'ChilliSpot-Bandwidth-Max-Up': upKbps * 1000,
     'Cisco-AVPair': `subscriber:bandwidth-downstream-kbps=${downKbps}`,
   };
-  if (macAddress) attrs['Calling-Station-Id'] = macAddress;
+  if (macAddress) attrs['Calling-Station-Id'] = formatCallingStationId(macAddress);
   return sendCoA(nasIp, attrs);
 }
 
@@ -391,7 +403,7 @@ async function applyQuota(sessionId, nasIp, quotaMb, macAddress) {
     'WISPr-Quota-Limit': quotaMb * 1024,
     'ChilliSpot-Max-Total-Octets': quotaBytes,
   };
-  if (macAddress) attrs['Calling-Station-Id'] = macAddress;
+  if (macAddress) attrs['Calling-Station-Id'] = formatCallingStationId(macAddress);
   return sendCoA(nasIp, attrs);
 }
 
@@ -401,6 +413,7 @@ module.exports = {
   changeBandwidth,
   applyQuota,
   buildRfc5176Packet,
+  formatCallingStationId,
   DISCONNECT_REQUEST,
   DISCONNECT_ACK,
   DISCONNECT_NACK,
