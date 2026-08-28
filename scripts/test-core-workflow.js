@@ -22,6 +22,9 @@ const {
   DISCONNECT_REQUEST,
   COA_REQUEST,
   formatCallingStationId,
+  buildDisconnectSelectors,
+  parseErrorCause,
+  describeDynAuthNack,
 } = require('../src/services/radiusClient');
 
 function readAttributes(packet) {
@@ -77,6 +80,23 @@ function testDynamicAuthorizationPackets() {
   assert(disconnect.packet.subarray(4, 20).equals(disconnect.requestAuth));
   const callingStationId = readAttributes(disconnect.packet).find((attribute) => attribute.type === 31);
   assert.strictEqual(callingStationId.value.toString('utf8'), 'AA:BB:CC:DD:EE:FF');
+
+  const selectors = buildDisconnectSelectors({
+    sessionId: 'session-test-1',
+    username: 'test-account',
+    macAddress: 'aa-bb-cc-dd-ee-ff',
+  });
+  assert.deepStrictEqual(selectors.map((selector) => selector.label), [
+    'Acct-Session-Id',
+    'User-Name + Calling-Station-Id',
+    'Calling-Station-Id',
+    'User-Name',
+  ]);
+  assert.strictEqual(selectors[2].attributes['Calling-Station-Id'], 'AA:BB:CC:DD:EE:FF');
+
+  const errorCause = Buffer.from([101, 6, 0, 0, 1, 247]);
+  assert.strictEqual(parseErrorCause(errorCause), 503);
+  assert.match(describeDynAuthNack(503), /không tìm thấy phiên/);
 
   const coa = buildRfc5176Packet(COA_REQUEST, 18, {
     'Acct-Session-Id': 'session-test-1',

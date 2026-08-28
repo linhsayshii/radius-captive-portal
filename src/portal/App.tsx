@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { formatMacAddress } from "@/lib/utils";
+import { formatMacAddress, normalizeMacAddress } from "@/lib/utils";
 
 type PortalContext = {
   destination: string;
@@ -60,8 +60,7 @@ function isValidMac(val: string): boolean {
   try {
     val = decodeURIComponent(val);
   } catch (_) {}
-  const cleaned = val.replace(/[^a-fA-F0-9]/g, "");
-  return cleaned.length === 12;
+  return Boolean(normalizeMacAddress(val));
 }
 
 function findValidMac(params: URLSearchParams): string {
@@ -391,8 +390,9 @@ function PortalLogin() {
       fetch("/api/guest/client-info")
         .then((res) => res.json())
         .then((data: { mac?: string | null }) => {
-          if (data?.mac) {
-            setContext((prev) => ({ ...prev, mac: data.mac || "" }));
+          const mac = normalizeMacAddress(data?.mac);
+          if (mac) {
+            setContext((prev) => ({ ...prev, mac }));
           }
         })
         .catch(() => {});

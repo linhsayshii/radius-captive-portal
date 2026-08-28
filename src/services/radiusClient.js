@@ -20,6 +20,7 @@ const ATTR_SESSION_TIMEOUT = 27;
 const ATTR_IDLE_TIMEOUT = 28;
 const ATTR_CALLING_STATION_ID = 31;
 const ATTR_ACCT_SESSION_ID = 44;
+const ATTR_ERROR_CAUSE = 101;
 const ATTR_VENDOR_SPECIFIC = 26;
 
 // Vendor IDs & Attributes
@@ -70,6 +71,41 @@ function formatCallingStationId(value) {
   const normalized = value.replace(/[^0-9a-f]/gi, '');
   if (!/^[0-9a-f]{12}$/i.test(normalized)) return value;
   return normalized.match(/.{2}/g).join(':').toUpperCase();
+}
+
+const DYN_AUTH_ERROR_CAUSES = {
+  401: 'Router không hỗ trợ thuộc tính trong yêu cầu ngắt',
+  402: 'Yêu cầu ngắt thiếu thuộc tính nhận diện phiên',
+  403: 'Thông tin NAS trong yêu cầu ngắt không khớp',
+  404: 'Router cho rằng yêu cầu ngắt không hợp lệ',
+  405: 'Router chưa cho phép RADIUS Disconnect. Kiểm tra /radius incoming accept=yes',
+  406: 'Router không hỗ trợ phần mở rộng RADIUS này',
+  407: 'Router từ chối giá trị thuộc tính dùng để nhận diện phiên',
+  501: 'Router không cho phép thực hiện yêu cầu ngắt',
+  502: 'Router không định tuyến được yêu cầu ngắt',
+  503: 'Router không tìm thấy phiên đang hoạt động tương ứng',
+  504: 'Router không thể xóa phiên đang hoạt động',
+  506: 'Router hiện không đủ tài nguyên để xử lý yêu cầu ngắt',
+};
+
+function parseErrorCause(attributeBuffer) {
+  for (let offset = 0; offset + 2 <= attributeBuffer.length;) {
+    const type = attributeBuffer.readUInt8(offset);
+    const length = attributeBuffer.readUInt8(offset + 1);
+    if (length < 2 || offset + length > attributeBuffer.length) break;
+    if (type === ATTR_ERROR_CAUSE && length === 6) {
+      return attributeBuffer.readUInt32BE(offset + 2);
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function describeDynAuthNack(errorCause) {
+  if (!errorCause) return 'Router từ chối lệnh ngắt/thay đổi (NACK)';
+  return DYN_AUTH_ERROR_CAUSES[errorCause]
+    ? `${DYN_AUTH_ERROR_CAUSES[errorCause]} (RADIUS Error-Cause ${errorCause})`
+    : `Router từ chối lệnh ngắt/thay đổi (RADIUS Error-Cause ${errorCause})`;
 }
 
 function buildVsa(vendorId, vendorType, valueBuffer) {
@@ -304,8 +340,9 @@ async function sendDynAuthPacket(nasIp, code, attributes, timeoutMs = 4000) {
         logger.info(`RADIUS DynAuth SUCCESS from ${nasIp} (Code: ${respCode})`);
         resolve({ success: true, code: respCode });
       } else if (respCode === DISCONNECT_NACK || respCode === COA_NACK) {
-        logger.warn(`RADIUS DynAuth REJECTED by ${nasIp} (Code: ${respCode})`);
-        resolve({ success: false, error: 'Router từ chối lệnh ngắt/thay đổi (NACK)', code: respCode });
+        const errorCause = parseErrorCause(respAttrs);
+        logger.warn(`RADIUS DynAuth REJECTED by ${nasIp} (Code: ${respCode}, Error-Cause: ${errorCause || 'none'})`);
+        resolve({ success: false, error: describeDynAuthNack(errorCause), code: respCode, errorCause });
       } else {
         logger.warn(`RADIUS DynAuth unexpected response code: ${respCode} from ${nasIp}`);
         resolve({ success: false, error: `Phản hồi không xác định: ${respCode}`, code: respCode });
@@ -340,29 +377,50 @@ async function sendDynAuthPacket(nasIp, code, attributes, timeoutMs = 4000) {
  */
 async function disconnectSession(target, legacyNasIp) {
   let nasIp = legacyNasIp;
-  let attrs = {};
+  let selectors = [];
 
   if (typeof target === 'object' && target !== null) {
     nasIp = target.nasIp || target.nas_identifier;
-    if (target.sessionId || target.session_id) {
-      attrs['Acct-Session-Id'] = target.sessionId || target.session_id;
-    }
-    if (target.username) {
-      attrs['User-Name'] = target.username;
-    }
-    if (target.macAddress || target.mac_address) {
-      attrs['Calling-Station-Id'] = formatCallingStationId(target.macAddress || target.mac_address);
-    }
-    if (target.ipAddress || target.ip_address) {
-      attrs['Framed-IP-Address'] = target.ipAddress || target.ip_address;
-    }
+    selectors = buildDisconnectSelectors(target);
   } else if (typeof target === 'string') {
     // Legacy invocation: disconnectSession(sessionId, nasIp)
-    attrs['Acct-Session-Id'] = target;
+    selectors = [{ label: 'Acct-Session-Id', attributes: { 'Acct-Session-Id': target } }];
   }
 
-  logger.info(`Sending RADIUS Disconnect-Request to NAS ${nasIp}`, attrs);
-  return sendDynAuthPacket(nasIp, DISCONNECT_REQUEST, attrs);
+  if (!selectors.length) {
+    return { success: false, error: 'Thiếu thông tin để nhận diện phiên cần ngắt' };
+  }
+
+  let lastResult;
+  for (const selector of selectors) {
+    logger.info(`Sending RADIUS Disconnect-Request to NAS ${nasIp} using ${selector.label}`, selector.attributes);
+    const result = await sendDynAuthPacket(nasIp, DISCONNECT_REQUEST, selector.attributes);
+    if (result.success || result.code !== DISCONNECT_NACK || result.errorCause === 405) {
+      return { ...result, selector: selector.label };
+    }
+    lastResult = { ...result, selector: selector.label };
+  }
+  return lastResult;
+}
+
+// Some NAS implementations require a single selector, and reject a request
+// when an otherwise valid session is accompanied by a differently-formatted
+// secondary identifier. Try the unique accounting id first, then identity
+// selectors sourced from the same accounting record.
+function buildDisconnectSelectors(target) {
+  const sessionId = target.sessionId || target.session_id;
+  const username = target.username;
+  const macAddress = formatCallingStationId(target.macAddress || target.mac_address);
+  const selectors = [];
+
+  if (sessionId) selectors.push({ label: 'Acct-Session-Id', attributes: { 'Acct-Session-Id': sessionId } });
+  if (username && macAddress) selectors.push({
+    label: 'User-Name + Calling-Station-Id',
+    attributes: { 'User-Name': username, 'Calling-Station-Id': macAddress },
+  });
+  if (macAddress) selectors.push({ label: 'Calling-Station-Id', attributes: { 'Calling-Station-Id': macAddress } });
+  if (username) selectors.push({ label: 'User-Name', attributes: { 'User-Name': username } });
+  return selectors;
 }
 
 /**
@@ -414,6 +472,9 @@ module.exports = {
   applyQuota,
   buildRfc5176Packet,
   formatCallingStationId,
+  buildDisconnectSelectors,
+  parseErrorCause,
+  describeDynAuthNack,
   DISCONNECT_REQUEST,
   DISCONNECT_ACK,
   DISCONNECT_NACK,
