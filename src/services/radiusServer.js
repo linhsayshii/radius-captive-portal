@@ -242,6 +242,7 @@ function decodeUserPassword(encrypted, requestAuthenticator) {
 function buildAccessAccept(packet, user, secondsRemaining, message, authEntry = null) {
   let downKbps = 5000, upKbps = 2000;
   let quotaMb = null;
+  let packageName = 'guest';
 
   if (authEntry?.bandwidth_down_kbps && authEntry?.bandwidth_up_kbps) {
     downKbps = Number(authEntry.bandwidth_down_kbps);
@@ -249,11 +250,16 @@ function buildAccessAccept(packet, user, secondsRemaining, message, authEntry = 
     if (authEntry.quota_mb) {
       quotaMb = Number(authEntry.quota_mb);
     }
+    if (authEntry.package_id) {
+      const pkg = packages.getById.get(authEntry.package_id);
+      if (pkg?.name) packageName = pkg.name;
+    }
   } else if (user) {
     const policy = getAccessPolicy(user);
     downKbps = policy.downKbps;
     upKbps = policy.upKbps;
     quotaMb = policy.quotaTotalMb;
+    if (policy.package?.name) packageName = policy.package.name;
   }
 
   const sessionTimeout = Math.max(1, Math.min(secondsRemaining, 0xFFFFFFFF));
@@ -262,7 +268,8 @@ function buildAccessAccept(packet, user, secondsRemaining, message, authEntry = 
     // 1. MikroTik Rate Limit: rx/tx (Upload/Download)
     buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
 
-    // 2. Aruba Instant AP / Virtual Controller (Kbps)
+    // 2. Aruba Instant AP / Virtual Controller (Role-Based and Numeric VSAs)
+    buildVsaBuffer(VENDOR_ARUBA, ARUBA_USER_ROLE, packageName),
     buildVsaBuffer(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_DOWN, uint32(downKbps)),
     buildVsaBuffer(VENDOR_ARUBA, ARUBA_BANDWIDTH_MAX_UP, uint32(upKbps)),
 
