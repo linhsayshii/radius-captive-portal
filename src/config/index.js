@@ -38,6 +38,9 @@ function loadConfig() {
     rateLimitApiMax: parseInt(process.env.RATE_LIMIT_API_MAX || '1200', 10),
     rateLimitAuthMax: parseInt(process.env.RATE_LIMIT_AUTH_MAX || '20', 10),
     rateLimitGuestMax: parseInt(process.env.RATE_LIMIT_GUEST_MAX || '60', 10),
+    // RFC 8910 Captive Portal API. This is the local HotSpot login URL so
+    // MikroTik can attach client-specific login parameters before redirecting.
+    captivePortalUserUrl: process.env.CAPTIVE_PORTAL_USER_URL || 'http://10.37.3.1/login',
   };
 }
 
