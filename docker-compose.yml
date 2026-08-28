@@ -1,0 +1,55 @@
+services:
+  portal:
+    build: .
+    command: npm start
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_PATH: /app/data/wifi-portal.db
+      RADIUS_DATABASE_URL: mysql://radius:${RADIUS_DB_PASSWORD:?set RADIUS_DB_PASSWORD}@radius-db:3306/radius
+      RADIUS_CLIENTS: ${RADIUS_CLIENTS:?set RADIUS_CLIENTS}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?set ADMIN_SESSION_SECRET}
+    ports:
+      - "3000:3000"
+    volumes:
+      - portal-data:/app/data
+    depends_on:
+      radius-db:
+        condition: service_healthy
+
+  radius-db:
+    image: mariadb:11
+    environment:
+      TZ: UTC
+      MARIADB_DATABASE: radius
+      MARIADB_USER: radius
+      MARIADB_PASSWORD: ${RADIUS_DB_PASSWORD:?set RADIUS_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set MARIADB_ROOT_PASSWORD}
+    volumes:
+      - radius-db-data:/var/lib/mysql
+      - ./freeradius/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  freeradius:
+    build: ./freeradius
+    environment:
+      RADIUS_DB_HOST: radius-db
+      RADIUS_DB_NAME: radius
+      RADIUS_DB_USER: radius
+      RADIUS_DB_PASSWORD: ${RADIUS_DB_PASSWORD:?set RADIUS_DB_PASSWORD}
+      RADIUS_SHARED_SECRET: ${RADIUS_SHARED_SECRET:?set RADIUS_SHARED_SECRET}
+      RADIUS_CLIENTS: ${RADIUS_CLIENTS:?set RADIUS_CLIENTS}
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    depends_on:
+      radius-db:
+        condition: service_healthy
+
+volumes:
+  portal-data:
+  radius-db-data:

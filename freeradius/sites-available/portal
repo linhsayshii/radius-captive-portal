@@ -1,0 +1,27 @@
+server portal {
+  listen {
+    type = auth
+    ipaddr = *
+    port = 1812
+  }
+  listen {
+    type = acct
+    ipaddr = *
+    port = 1813
+  }
+  authorize {
+    sql
+    if (!control:Cleartext-Password) {
+      reject
+    }
+    pap
+  }
+  authenticate {
+    Auth-Type PAP {
+      pap
+    }
+  }
+  accounting {
+    sql
+  }
+}

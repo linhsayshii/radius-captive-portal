@@ -123,6 +123,11 @@ router.post('/local', async (req, res) => {
         quota_mb: policy.quotaTotalMb,
         max_devices: policy.maxDevices,
       }, policy.durationSeconds * 1000);
+      try {
+        await require('../services/radiusPolicyStore').upsertAuthorization(authorization);
+      } catch (error) {
+        return res.status(503).json({ error: 'Máy chủ RADIUS chưa sẵn sàng. Vui lòng thử lại.' });
+      }
     }
 
     res.json({

@@ -161,19 +161,22 @@ function postLoginToRouter(context: PortalContext) {
   form.action = targetUrl;
   form.style.display = "none";
 
+  // Keep the RADIUS identity stable across router formats. The backend stores
+  // and authorizes this canonical MAC value in FreeRADIUS' SQL policy store.
+  const radiusIdentity = context.mac.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
   const fields: Array<[string, string]> = context.isAruba
     ? [
         ["cmd", "authenticate"],
-        ["user", context.mac],
-        ["username", context.mac],
-        ["password", context.mac],
+        ["user", radiusIdentity],
+        ["username", radiusIdentity],
+        ["password", radiusIdentity],
         ["url", context.destination || "http://captive.apple.com"],
         ["authenticated", "1"],
         ["Login", "Log In"],
       ]
     : [
-        ["username", context.mac],
-        ["password", context.mac],
+        ["username", radiusIdentity],
+        ["password", radiusIdentity],
         ["dst", context.destination],
       ];
 

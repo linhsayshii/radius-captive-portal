@@ -28,6 +28,9 @@ function loadConfig() {
     radiusAccountingPort: parseInt(process.env.RADIUS_ACCOUNTING_PORT || '1813', 10),
     radiusCoaPort: parseInt(process.env.RADIUS_COA_PORT || '3799', 10),
     radiusClients: parseCsv(process.env.RADIUS_CLIENTS),
+    // FreeRADIUS policy store. This is deliberately separate from the portal
+    // SQLite database: FreeRADIUS uses MySQL/MariaDB through rlm_sql.
+    radiusDatabaseUrl: process.env.RADIUS_DATABASE_URL || '',
     // WebDAV
     webdavUrl: process.env.WEBDAV_URL || '',
     webdavUsername: process.env.WEBDAV_USERNAME || '',

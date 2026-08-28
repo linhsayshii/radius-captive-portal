@@ -1,13 +1,12 @@
 const app = require('./app');
 const { loadConfig } = require('./config');
 const logger = require('./utils/logger');
-const { start: startRadius, stop: stopRadius } = require('./services/radiusServer');
 
 const config = loadConfig();
 
 function validateRuntimeConfig() {
   const errors = [];
-  const ports = [config.port, config.radiusAuthPort, config.radiusAccountingPort, config.radiusCoaPort];
+  const ports = [config.port];
   if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     errors.push('One or more configured ports are invalid');
   }
@@ -21,6 +20,9 @@ function validateRuntimeConfig() {
     }
     if (!config.radiusClients.length) {
       errors.push('RADIUS_CLIENTS must contain the trusted NAS/router source IPs in production');
+    }
+    if (!config.radiusDatabaseUrl) {
+      errors.push('RADIUS_DATABASE_URL must point to the FreeRADIUS MariaDB policy store in production');
     }
   }
 
@@ -47,12 +49,10 @@ async function bootstrap() {
     throw new Error(`Invalid runtime configuration: ${configurationErrors.join('; ')}`);
   }
 
-  await startRadius({ authPort: config.radiusAuthPort, accountingPort: config.radiusAccountingPort });
   const httpServer = await startHttpServer();
 
   const shutdown = (signal) => {
     logger.info(`Received ${signal}; shutting down WiFi Portal`);
-    stopRadius();
     httpServer.close(() => process.exit(0));
   };
   process.once('SIGINT', () => shutdown('SIGINT'));

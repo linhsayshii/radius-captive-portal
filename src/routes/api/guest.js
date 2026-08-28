@@ -114,6 +114,14 @@ router.post('/connect', async (req, res) => {
       ...packageDetails,
     }, durationMs);
 
+    try {
+      await require('../../services/radiusPolicyStore').upsertAuthorization(entry);
+    } catch (error) {
+      logger.error('Unable to synchronize guest policy to FreeRADIUS', error);
+      revokeMac(macAddress);
+      return res.status(503).json({ error: 'Máy chủ RADIUS chưa sẵn sàng. Vui lòng thử lại.' });
+    }
+
     // Log connection
     logs.create.run({
       user_id: null,
@@ -137,25 +145,6 @@ router.post('/connect', async (req, res) => {
       switchIp: req.body.switch_ip || null,
       referer: req.headers.referer || null,
     });
-
-    // Send RADIUS Disconnect-Request (RFC 3576 port 3799) to NAS to kick/re-evaluate pre-auth state
-    try {
-      const { disconnectSession } = require('../../services/radiusClient');
-      const { loadConfig } = require('../../config');
-      const runtimeConfig = loadConfig();
-      const targetNasIps = req.body.switch_ip
-        ? [req.body.switch_ip, ...runtimeConfig.radiusClients]
-        : runtimeConfig.radiusClients;
-
-      const uniqueNasIps = [...new Set(targetNasIps.filter((ip) => ip && ip !== '0.0.0.0' && !ip.includes('/')))];
-      for (const nasIp of uniqueNasIps) {
-        disconnectSession({
-          macAddress: macAddress,
-          username: macAddress,
-          nasIp: nasIp,
-        }).catch((err) => logger.debug('DynAuth notification to NAS ignored:', err.message));
-      }
-    } catch (_) {}
 
     res.json({
       success: true,
@@ -218,6 +207,12 @@ router.delete('/whitelist/:mac', requireApiAuth, async (req, res) => {
 
   macWhitelist.delete(mac);
   macAuthorizations.delete.run(mac);
+  try {
+    await require('../../services/radiusPolicyStore').removeAuthorization(mac);
+  } catch (error) {
+    logger.error('Unable to revoke FreeRADIUS policy', error);
+    return res.status(503).json({ error: 'Không thể đồng bộ thu hồi quyền với RADIUS.' });
+  }
 
   logger.info('MAC authorisation revoked by admin', { macAddress: mac, adminId: req.session.adminId });
   res.json({ success: true });
@@ -230,6 +225,7 @@ function authorizeMac(mac, details = {}, durationMs = 24 * 60 * 60 * 1000) {
 
   const entry = {
     ...details,
+    mac_address: normalized,
     connected_at: details.connected_at || new Date().toISOString(),
     expires_at: new Date(Date.now() + durationMs).toISOString(),
   };

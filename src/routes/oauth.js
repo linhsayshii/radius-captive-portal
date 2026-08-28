@@ -172,7 +172,7 @@ router.get('/google/callback', (req, res, next) => {
   const context = readState(req.query.state, config.sessionSecret);
   if (!context) return redirectToError(res, 'invalid_oauth_state');
 
-  return passport.authenticate('google', { failureRedirect: '/error.html?error=unauthorized' })(req, res, (error) => {
+  return passport.authenticate('google', { failureRedirect: '/error.html?error=unauthorized' })(req, res, async (error) => {
     if (error) return next(error);
     if (!req.user) return redirectToError(res, 'oauth_failed');
 
@@ -194,6 +194,12 @@ router.get('/google/callback', (req, res, next) => {
         quota_mb: policy.quotaTotalMb,
         max_devices: policy.maxDevices,
       }, policy.durationSeconds * 1000);
+      try {
+        await require('../services/radiusPolicyStore').upsertAuthorization(authorization);
+      } catch (error) {
+        logger.error('Unable to synchronize OAuth policy to FreeRADIUS', error);
+        return res.redirect('/?error=radius_unavailable');
+      }
 
       // Log successful connection
       try {
@@ -228,4 +234,3 @@ router.get('/google/callback', (req, res, next) => {
 });
 
 module.exports = { router, passport };
-

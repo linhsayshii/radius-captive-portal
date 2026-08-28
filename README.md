@@ -1,12 +1,24 @@
-# WiFi Captive Portal & Centralized RADIUS Server
+# WiFi Captive Portal & FreeRADIUS
 
-Hệ thống quản lý mạng WiFi tập trung (Centralized WiFi Access Management) tích hợp **Captive Portal**, **RADIUS Server** (RFC 2865 / RFC 2866), **Dynamic Authorization CoA / Disconnect** (RFC 5176 / RFC 3576), **Google OAuth 2.0**, và **Trang quản trị Admin Dashboard**.
+Hệ thống quản lý mạng WiFi tập trung tích hợp **Captive Portal**, **FreeRADIUS**, MariaDB, Google OAuth 2.0 và Admin Dashboard. Giao diện portal, gói cước, giới hạn thời lượng, tốc độ upload/download, quota và số thiết bị được giữ lại; RADIUS UDP không còn do Node.js tự xử lý.
 
 Hỗ trợ đa nền tảng phần cứng mạng: **MikroTik RouterOS**, **Aruba Instant AP (IAP / Virtual Controller)**, **OpenWrt (CoovaChilli / OpenNDS)**, **Ubiquiti UniFi**, **pfSense / OPNsense**, **Cisco Meraki**.
 
 ---
 
-## 🚀 Cài đặt & Khởi chạy nhanh
+## 🚀 Khởi chạy bằng Docker Compose
+
+1. Sao chép `.env.example` thành `.env`, sau đó đặt các secret mạnh cho `RADIUS_SHARED_SECRET`, `RADIUS_DB_PASSWORD`, `MARIADB_ROOT_PASSWORD` và `ADMIN_SESSION_SECRET`.
+2. Đặt `RADIUS_CLIENTS` thành danh sách IP của router/NAS, phân cách bằng dấu phẩy.
+3. Khởi chạy:
+
+   ```bash
+   docker compose up --build
+   ```
+
+FreeRADIUS nhận Auth trên UDP `1812` và Accounting trên UDP `1813`; MariaDB chỉ nằm trong mạng Docker. Không dùng cấu hình `client all` trong tài liệu Splash ở môi trường production.
+
+## Cài đặt phát triển
 
 1. Sao chép file cấu hình mẫu và điền thông tin:
    ```bash
@@ -113,7 +125,5 @@ Khi người dùng chưa đăng nhập, Router cần mở thông các tên miề
 | Cổng | Giao thức | Dịch vụ | Mục đích |
 | :--- | :--- | :--- | :--- |
 | **`3000`** | TCP (HTTP) | Web Server | Giao diện Captive Portal & Admin Dashboard |
-| **`1812`** | UDP | RADIUS Auth | Router gửi `Access-Request` để xác thực quyền |
-| **`1813`** | UDP | RADIUS Acct | Router gửi `Accounting-Request` (Start, Interim, Stop) |
-| **`3799`** | UDP | Dynamic CoA | Server gửi `Disconnect-Request` để ngắt phiên làm việc |
-
+| **`1812`** | UDP | FreeRADIUS Auth | Router gửi `Access-Request` để xác thực quyền |
+| **`1813`** | UDP | FreeRADIUS Acct | Router gửi `Accounting-Request` (Start, Interim, Stop) |
