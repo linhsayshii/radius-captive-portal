@@ -34,6 +34,26 @@ try {
   db.exec(`ALTER TABLE users ADD COLUMN package_id INTEGER REFERENCES packages(id);`);
 } catch (_) {}
 
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN package_id INTEGER REFERENCES packages(id);`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN bandwidth_down_kbps INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN bandwidth_up_kbps INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN quota_mb INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN max_devices INTEGER;`);
+} catch (_) {}
+
 // User queries
 const userQueries = {
   getById: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.id = ?'),
@@ -176,12 +196,15 @@ const logQueries = {
 
 const macAuthorizationQueries = {
   upsert: db.prepare(`
-    INSERT INTO mac_authorizations (mac_address, user_id, username, access_type, connected_at, expires_at, ip_address, user_agent)
-    VALUES (@mac_address, @user_id, @username, @access_type, @connected_at, @expires_at, @ip_address, @user_agent)
+    INSERT INTO mac_authorizations (mac_address, user_id, username, access_type, connected_at, expires_at, ip_address, user_agent, package_id, bandwidth_down_kbps, bandwidth_up_kbps, quota_mb, max_devices)
+    VALUES (@mac_address, @user_id, @username, @access_type, @connected_at, @expires_at, @ip_address, @user_agent, @package_id, @bandwidth_down_kbps, @bandwidth_up_kbps, @quota_mb, @max_devices)
     ON CONFLICT(mac_address) DO UPDATE SET
       user_id = excluded.user_id, username = excluded.username, access_type = excluded.access_type,
       connected_at = excluded.connected_at, expires_at = excluded.expires_at,
-      ip_address = excluded.ip_address, user_agent = excluded.user_agent
+      ip_address = excluded.ip_address, user_agent = excluded.user_agent,
+      package_id = excluded.package_id, bandwidth_down_kbps = excluded.bandwidth_down_kbps,
+      bandwidth_up_kbps = excluded.bandwidth_up_kbps, quota_mb = excluded.quota_mb,
+      max_devices = excluded.max_devices
   `),
   get: db.prepare('SELECT * FROM mac_authorizations WHERE mac_address = ?'),
   getAll: db.prepare('SELECT * FROM mac_authorizations ORDER BY expires_at DESC'),

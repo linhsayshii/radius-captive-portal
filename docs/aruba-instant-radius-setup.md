@@ -4,6 +4,44 @@ Hướng dẫn tích hợp mạng WiFi Khách trên **Aruba Instant AP (Virtual 
 
 ---
 
+## Luồng xác thực (để hiểu trước khi cấu hình)
+
+```
+1.  Client kết nối WiFi (chưa xác thực)
+        │
+        ▼
+2.  Aruba redirect client → captive portal
+    URL: /?mac=AA:BB:CC:DD:EE:FF&switchip=192.168.1.1&url=http://google.com
+        │
+        ▼
+3.  Client mở portal trên trình duyệt
+        │
+        ▼
+4.  User bấm "Truy cập ngay" (hoặc đăng nhập tài khoản)
+        │
+        ▼
+5.  Portal gọi POST /api/guest/connect
+    → upsert MAC vào bảng mac_authorizations
+        │
+        ▼
+6.  Portal redirect client → trang đích (dst URL)
+        │
+        ▼
+7.  (Ngầm) Aruba gửi Access-Request đến RADIUS server (port 1812)
+    Calling-Station-Id = AA:BB:CC:DD:EE:FF
+        │
+        ▼
+8.  (Ngầm) RADIUS server kiểm tra mac_authorizations
+    → trả Access-Accept với bandwidth limits
+        │
+        ▼
+9.  (Ngầm) Aruba nhận Access-Accept → cho phép client truy cập Internet
+```
+
+> **Quan trọng:** Không cần form POST sang Aruba controller. Tất cả xác thực diễn ra qua RADIUS (port 1812). Portal chỉ cần redirect client sau khi authorize MAC.
+
+---
+
 ## 1. Cấu hình qua giao diện Web (Aruba Instant GUI)
 
 Đăng nhập vào Virtual Controller (`https://<IP_ARUBA>:4343`), vào menu **Configuration** -> **Networks** -> bấm **New** (hoặc dấu `+`):
@@ -111,3 +149,107 @@ wlan ssid-profile "WiFi-Khach-Hang"
   rf-band all
   set-role-pre-auth Portal-Pre-Auth
 ```
+
+---
+
+## 3. Kiểm tra & Xử lý sự cố
+
+### 3.1 Kiểm tra Access-Request từ Aruba
+
+Trên server chạy RADIUS server, dùng `tcpdump` để xem Aruba có gửi Access-Request không:
+
+```bash
+# Xem tất cả gói RADIUS (UDP port 1812 = Auth, 1813 = Accounting)
+sudo tcpdump -i any udp port 1812 or udp port 1813 -v
+
+# Chỉ xem Access-Request (code=01) từ IP của Aruba
+sudo tcpdump -i any udp port 1812 -vv 'udp[0:1] = 0x01'
+```
+
+**Kết quả mong đợi:** Thấy gói UDP từ IP Aruba đến server port 1812 sau khi user bấm "Truy cập ngay" (thường trong vòng 1-5 giây).
+
+**Nếu KHÔNG thấy gì:**
+- Aruba chưa gửi Access-Request → kiểm tra **cấu hình RADIUS Authentication Server** (port 1812, shared key)
+- Chạy thử trên server: `nc -ul 1812` để xem có gói UDP đến không
+- Kiểm tra firewall: `sudo iptables -L -n | grep 1812` hoặc `sudo ufw status`
+
+### 3.2 Kiểm tra MAC đã được authorize chưa
+
+Sau khi bấm "Truy cập ngay", MAC nên xuất hiện trong bảng `mac_authorizations`. Kiểm tra qua **Admin Dashboard** → tab **Quyền truy cập MAC**, hoặc qua API:
+
+```bash
+curl -s http://localhost:3000/api/guest/whitelist \
+  -H "Cookie: admin_session=<token>"
+```
+
+### 3.3 Kiểm tra server logs
+
+Server logs cho biết Aruba có gửi Access-Request và server trả Access-Accept chưa:
+
+```bash
+# Theo dõi logs
+tail -f /path/to/logs/access.log | grep -i radius
+
+# Hoặc xem stdout/stderr nếu chạy trực tiếp
+npm start 2>&1 | grep -i "radius\|access-request\|access-accept"
+```
+
+**Log mong đợi khi thành công:**
+```
+RADIUS Access-Request from 192.168.1.248 - User: AA:BB:CC:DD:EE:FF, MAC: aabbccddeeff
+RADIUS Access-Accept for MAC: aabbccddeeff (3599s remaining, 5000/2000 kbps)
+```
+
+**Nếu thấy "Access-Reject" thay vì "Access-Accept":**
+- MAC chưa được authorize → gọi lại `/api/guest/connect`
+- MAC đã hết hạn → thời gian trên server/dient thoải không đúng
+- User account inactive hoặc gói cước inactive
+
+### 3.4 Kiểm tra CoA / Disconnect port 3799
+
+Port 3799 cho phép server **chủ động ngắt kết nối** thiết bị. Kiểm tra Aruba có mở port này chưa:
+
+```bash
+# Từ server, gửi test packet đến Aruba port 3799
+# (Dùng radclient của FreeRADIUS nếu có)
+echo "User-Name=test" | radclient -x 192.168.1.248:3799 disconnect secret
+```
+
+Nếu Aruba không phản hồi → kiểm tra Aruba CLI:
+```
+show eui-acl           # xem access rules
+show rights rf-threshold  # xem CoA config
+```
+
+### 3.5 Kiểm tra captive portal redirect
+
+Trên máy client, sau khi kết nối WiFi (chưa đăng nhập), mở trình duyệt truy cập `captive.apple.com`:
+
+- **Đúng:** Chuyển hướng đến trang portal
+- **Sai:** Hiện trang "Success" (không redirect) → Aruba chưa redirect đúng
+
+Kiểm tra trên Aruba: **Configuration → Networks → SSID → Security tab**
+- Splash page type phải là **`External`**, không phải `Internal` hay `None`
+- Captive portal profile phải có **Type = RADIUS Authentication**
+
+### 3.6 iPhone / iOS captive portal hiện chậm
+
+1. iOS đợi DHCP + DNS resolution xong mới probe → có thể 5-15 giây sau khi kết nối
+2. Probe đầu tiên gửi đến `captive.apple.com` — nếu DNS resolve ra IP của portal thay vì Apple, iOS sẽ redirect
+3. **Cải thiện:** Trên Aruba, đảm bảo SSID dùng **WPA2/WPA3 Enterprise** (RADIUS) thay vì WPA2 Personal
+
+### 3.7 Android bị "about:blank blocked"
+
+- Android dùng Chromium WebView để mở captive portal — WebView này chặn `about:blank` và `data:` URLs
+- **Không phải lỗi từ portal** — đây là hạn chế của Android WebView
+- Nếu sau khi đăng nhập bị redirect ra blank page → portal redirect URL bị lỗi, xem mục 3.5
+
+### Checklist xác minh hoàn chỉnh
+
+- [ ] Aruba gửi Access-Request đến server port 1812 (`tcpdump`)
+- [ ] MAC xuất hiện trong `mac_authorizations` sau khi bấm "Truy cập ngay"
+- [ ] Logs thấy `Access-Accept` (không phải `Access-Reject`)
+- [ ] Client có thể truy cập Internet sau khi đăng nhập
+- [ ] CoA port 3799 mở trên Aruba
+- [ ] Accounting interim (port 1813) hoạt động — thấy gói Update trong logs mỗi phút
+- [ ] Walled Garden đúng — `captive.apple.com` redirect về portal

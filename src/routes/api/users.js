@@ -61,6 +61,60 @@ router.delete('/:id', requireApiAuth, (req, res) => {
   res.json({ success: true });
 });
 
+// Package status for a specific user
+router.get('/:id/package-status', requireApiAuth, (req, res) => {
+  const user = users.getById.get(req.params.id);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const packageId = Number.isInteger(Number(user.package_id)) && Number(user.package_id) > 0
+    ? Number(user.package_id)
+    : null;
+
+  if (!packageId) {
+    return res.json({
+      user_id: user.id,
+      has_package: false,
+      status: 'unassigned',
+      message: 'Chưa áp dụng gói cước. Sử dụng gói mặc định hệ thống.',
+      defaults: {
+        duration_seconds: 86400,
+        down_kbps: 5000,
+        up_kbps: 2000,
+        max_devices: 3,
+      },
+    });
+  }
+
+  const pkg = user.package_id ? (require('../db').packages.getById.get(packageId)) : null;
+
+  if (!pkg) {
+    return res.json({
+      user_id: user.id,
+      has_package: false,
+      status: 'unassigned',
+      message: 'Gói cước không tồn tại hoặc đã bị xóa.',
+    });
+  }
+
+  return res.json({
+    user_id: user.id,
+    has_package: true,
+    status: pkg.is_active ? 'active' : 'inactive',
+    package: {
+      id: pkg.id,
+      name: pkg.name,
+      duration_minutes: pkg.duration_minutes,
+      quota_mb: pkg.quota_mb,
+      bandwidth_down_kbps: pkg.bandwidth_down_kbps,
+      bandwidth_up_kbps: pkg.bandwidth_up_kbps,
+      max_devices: pkg.max_devices,
+      is_active: pkg.is_active,
+    },
+  });
+});
+
 // List OAuth addresses assigned to an account.
 router.get('/:id/whitelist', requireApiAuth, (req, res) => {
   const user = users.getById.get(req.params.id);

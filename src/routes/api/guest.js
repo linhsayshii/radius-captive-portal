@@ -67,8 +67,52 @@ router.post('/connect', async (req, res) => {
       });
     }
 
-    // Check if already registered
-    if (getAuthorizedMac(macAddress)) {
+    // Resolve package details if a package was selected
+    const { packages } = require('../../db');
+    const packageId = req.body.package_id ? parseInt(req.body.package_id) : null;
+    let packageDetails = null;
+    let durationMs = 24 * 60 * 60 * 1000; // default 24h
+
+    if (packageId) {
+      const pkg = packages.getById.get(packageId);
+      if (!pkg) {
+        return res.status(400).json({ error: 'Gói cước không tồn tại.' });
+      }
+      if (!pkg.is_active) {
+        return res.status(400).json({ error: 'Gói cước đã bị vô hiệu hóa.' });
+      }
+      packageDetails = {
+        package_id: pkg.id,
+        bandwidth_down_kbps: pkg.bandwidth_down_kbps,
+        bandwidth_up_kbps: pkg.bandwidth_up_kbps,
+        quota_mb: pkg.quota_mb,
+        max_devices: pkg.max_devices,
+      };
+      durationMs = pkg.duration_minutes * 60 * 1000;
+    }
+
+    // Check if already registered with same package
+    const existingAuth = getAuthorizedMac(macAddress);
+    if (existingAuth) {
+      // If different package requested, re-authorize
+      if (!packageId || existingAuth.package_id !== packageId) {
+        const entry = authorizeMac(macAddress, {
+          connected_at: new Date().toISOString(),
+          ip_address: req.ip,
+          user_agent: req.headers['user-agent'],
+          access_type: 'instant',
+          package_id: packageId,
+          ...packageDetails,
+        }, durationMs);
+        logger.info('Guest re-authorized with new package', { macAddress, packageId });
+        return res.json({
+          success: true,
+          message: 'Kết nối thành công',
+          mac_address: macAddress,
+          expires_at: entry.expires_at,
+          package: packageDetails,
+        });
+      }
       logger.info('Guest already connected', { macAddress });
       return res.json({
         success: true,
@@ -77,13 +121,15 @@ router.post('/connect', async (req, res) => {
       });
     }
 
-    // Add to whitelist with expiry (24 hours default)
+    // Add to whitelist
     const entry = authorizeMac(macAddress, {
       connected_at: new Date().toISOString(),
       ip_address: req.ip,
       user_agent: req.headers['user-agent'],
       access_type: 'instant',
-    });
+      package_id: packageId,
+      ...packageDetails,
+    }, durationMs);
 
     // Log connection
     logs.create.run({
@@ -95,16 +141,18 @@ router.post('/connect', async (req, res) => {
       nas_identifier: null,
       details: JSON.stringify({
         user_agent: req.headers['user-agent'],
+        package_id: packageId,
       }),
     });
 
-    logger.info('Guest connected', { macAddress, ip: req.ip });
+    logger.info('Guest connected', { macAddress, ip: req.ip, packageId });
 
     res.json({
       success: true,
       message: 'Kết nối thành công',
       mac_address: macAddress,
       expires_at: entry.expires_at,
+      package: packageDetails,
     });
   } catch (err) {
     logger.error('Guest connect error:', err);
@@ -185,6 +233,11 @@ function authorizeMac(mac, details = {}, durationMs = 24 * 60 * 60 * 1000) {
     expires_at: entry.expires_at,
     ip_address: details.ip_address || null,
     user_agent: details.user_agent || null,
+    package_id: details.package_id || null,
+    bandwidth_down_kbps: details.bandwidth_down_kbps || null,
+    bandwidth_up_kbps: details.bandwidth_up_kbps || null,
+    quota_mb: details.quota_mb || null,
+    max_devices: details.max_devices || null,
   });
   return entry;
 }

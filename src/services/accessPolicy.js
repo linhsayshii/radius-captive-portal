@@ -5,6 +5,23 @@ const DEFAULT_DOWN_KBPS = 5000;
 const DEFAULT_UP_KBPS = 2000;
 const DEFAULT_MAX_DEVICES = 3;
 
+function logNoPackageWarning(userId) {
+  // Avoid spamming logs for repeated calls from the idle checker
+  if (logNoPackageWarning._logged === undefined) logNoPackageWarning._logged = new Set();
+  if (logNoPackageWarning._logged.has(userId)) return;
+  logNoPackageWarning._logged.add(userId);
+  const logger = require('../utils/logger');
+  logger.warn('getAccessPolicy: user has no package assigned, using system defaults', {
+    userId,
+    defaults: {
+      durationSeconds: DEFAULT_DURATION_SECONDS,
+      downKbps: DEFAULT_DOWN_KBPS,
+      upKbps: DEFAULT_UP_KBPS,
+      maxDevices: DEFAULT_MAX_DEVICES,
+    },
+  });
+}
+
 /**
  * Resolve the policy applied to a user at the point a network session starts.
  * Keeping this in one place prevents the portal, RADIUS Access and Accounting
@@ -15,6 +32,10 @@ function getAccessPolicy(user) {
     ? Number(user.package_id)
     : null;
   const pkg = packageId ? packages.getById.get(packageId) : null;
+
+  if (!packageId) {
+    logNoPackageWarning(user?.id || user?.identifier || 'unknown');
+  }
 
   return {
     package: pkg,

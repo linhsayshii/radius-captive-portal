@@ -87,7 +87,12 @@ CREATE TABLE IF NOT EXISTS mac_authorizations (
   connected_at DATETIME NOT NULL,
   expires_at DATETIME NOT NULL,
   ip_address TEXT,
-  user_agent TEXT
+  user_agent TEXT,
+  package_id INTEGER REFERENCES packages(id),
+  bandwidth_down_kbps INTEGER,
+  bandwidth_up_kbps INTEGER,
+  quota_mb INTEGER,
+  max_devices INTEGER
 );
 
 -- Connection Logs

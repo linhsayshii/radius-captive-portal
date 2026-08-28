@@ -147,6 +147,21 @@ function verifyAccountingRequest(packet) {
   return crypto.timingSafeEqual(expected, packet.authenticator);
 }
 
+function verifyAccessRequest(packet) {
+  // RFC 2865 Section 3: Access-Request authenticator is MD5(packet header +
+  // attributes + shared secret). Reconstruct and compare to detect spoofed requests.
+  const request = Buffer.from(packet.raw);
+  request.fill(0, 4, 20);
+  const expected = crypto.createHash('md5')
+    .update(Buffer.concat([request, getSharedSecret()]))
+    .digest();
+  try {
+    return crypto.timingSafeEqual(expected, packet.authenticator);
+  } catch (_) {
+    return false;
+  }
+}
+
 function buildResponse(requestCode, requestId, requestAuth, attributes) {
   const code = requestCode;
   const id = requestId;
@@ -211,18 +226,28 @@ function decodeUserPassword(encrypted, requestAuthenticator) {
   return Buffer.concat(plainBlocks).toString('utf8').replace(/\0+$/, '');
 }
 
-function buildAccessAccept(packet, user, secondsRemaining, message) {
-  const policy = getAccessPolicy(user);
-  const sessionTimeout = Math.max(1, Math.min(secondsRemaining, policy.durationSeconds));
+function buildAccessAccept(packet, user, secondsRemaining, message, authEntry = null) {
+  let downKbps = 5000, upKbps = 2000;
+
+  if (authEntry?.bandwidth_down_kbps && authEntry?.bandwidth_up_kbps) {
+    downKbps = Number(authEntry.bandwidth_down_kbps);
+    upKbps = Number(authEntry.bandwidth_up_kbps);
+  } else if (user) {
+    const policy = getAccessPolicy(user);
+    downKbps = policy.downKbps;
+    upKbps = policy.upKbps;
+  }
+
+  const sessionTimeout = Math.max(1, Math.min(secondsRemaining, 86400));
 
   return buildResponse(PACKET_ACCESS_ACCEPT, packet.id, packet.authenticator, {
     [ATTR_SESSION_TIMEOUT]: [uint32(sessionTimeout)],
     [ATTR_IDLE_TIMEOUT]: [uint32(300)],
     [ATTR_REPLY_MESSAGE]: [Buffer.from(message)],
     [ATTR_VENDOR_SPECIFIC]: [
-      buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${policy.upKbps}k/${policy.downKbps}k`),
-      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(policy.downKbps * 1000)),
-      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(policy.upKbps * 1000)),
+      buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
+      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
+      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
     ],
   });
 }
@@ -254,19 +279,27 @@ async function handleAccessRequest(packet, rinfo) {
           });
         }
 
-        const policy = getAccessPolicy(user);
-        if (!policy.packageValid) {
-          return buildResponse(PACKET_ACCESS_REJECT, packet.id, packet.authenticator, {
-            [ATTR_REPLY_MESSAGE]: [Buffer.from('The assigned package is inactive')],
-          });
+        if (user) {
+          const policy = getAccessPolicy(user);
+          if (!policy.packageValid) {
+            return buildResponse(PACKET_ACCESS_REJECT, packet.id, packet.authenticator, {
+              [ATTR_REPLY_MESSAGE]: [Buffer.from('The assigned package is inactive')],
+            });
+          }
         }
 
         const secondsRemaining = Math.max(
           1,
           Math.floor((new Date(authEntry.expires_at).getTime() - Date.now()) / 1000)
         );
-        logger.info(`RADIUS Access-Accept for MAC: ${normalizedMac} (${secondsRemaining}s remaining, ${policy.downKbps}/${policy.upKbps} kbps)`);
-        return buildAccessAccept(packet, user, secondsRemaining, 'Access authorized by central portal');
+        const downKbps = authEntry.bandwidth_down_kbps
+          ? `${authEntry.bandwidth_down_kbps}`
+          : (user ? `${getAccessPolicy(user).downKbps}` : '5000');
+        const upKbps = authEntry.bandwidth_up_kbps
+          ? `${authEntry.bandwidth_up_kbps}`
+          : (user ? `${getAccessPolicy(user).upKbps}` : '2000');
+        logger.info(`RADIUS Access-Accept for MAC: ${normalizedMac} (${secondsRemaining}s remaining, ${downKbps}/${upKbps} kbps)`);
+        return buildAccessAccept(packet, user, secondsRemaining, 'Access authorized by central portal', authEntry);
       }
     } catch (err) {
       logger.error('Error verifying MAC authorization:', err);
@@ -334,16 +367,24 @@ async function handleAccountingRequest(packet, rinfo) {
         throw new Error('Accounting request belongs to an inactive account');
       }
 
-      const policy = getAccessPolicy(user);
-      if (!policy.packageValid) {
-        throw new Error('Accounting request belongs to an inactive package');
+      if (user) {
+        const policy = getAccessPolicy(user);
+        if (!policy.packageValid) {
+          throw new Error('Accounting request belongs to an inactive package');
+        }
       }
 
       const userId = user?.id || null;
-      const packageId = policy.packageId;
-      const downKbps = policy.downKbps;
-      const upKbps = policy.upKbps;
-      const quotaTotalMb = policy.quotaTotalMb;
+      const packageId = authEntry?.package_id || (user ? getAccessPolicy(user).packageId : null) || null;
+      const downKbps = authEntry?.bandwidth_down_kbps
+        ? Number(authEntry.bandwidth_down_kbps)
+        : (user ? getAccessPolicy(user).downKbps : 5000);
+      const upKbps = authEntry?.bandwidth_up_kbps
+        ? Number(authEntry.bandwidth_up_kbps)
+        : (user ? getAccessPolicy(user).upKbps : 2000);
+      const quotaTotalMb = authEntry?.quota_mb
+        ? Number(authEntry.quota_mb)
+        : (user ? getAccessPolicy(user).quotaTotalMb : null);
 
       // Check if session already exists
       const existingSession = sessions.getBySessionId.get(sessionId);
@@ -485,6 +526,10 @@ function createServer(port, name) {
 
       switch (packet.code) {
         case PACKET_ACCESS_REQUEST:
+          if (!verifyAccessRequest(packet)) {
+            logger.warn(`RADIUS Access-Request rejected because its authenticator is invalid (${rinfo.address})`);
+            return;
+          }
           response = await handleAccessRequest(packet, rinfo);
           break;
         case PACKET_ACCOUNTING_REQUEST:
