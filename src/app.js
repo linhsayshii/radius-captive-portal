@@ -71,7 +71,6 @@ app.use('/', require('./routes'));
 app.use('/auth', require('./routes/auth'));
 app.use('/admin', require('./routes/auth')); // Admin auth routes
 app.use('/admin/api', require('./routes/admin'));
-app.use('/admin/api', require('./routes/admin/stats'));
 app.use('/admin/api', require('./routes/admin/backup'));
 app.use('/admin/api/settings', require('./routes/api/settings'));
 app.use('/api/packages', require('./routes/api/packages'));

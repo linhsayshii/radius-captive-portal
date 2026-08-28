@@ -6,9 +6,21 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      # Keep CI's SQLite state outside the checkout and never point tests at a
+      # production RADIUS/MariaDB instance.
+      DATABASE_PATH: ${{ runner.temp }}/wifi-portal-ci.db
+      RADIUS_SHARED_SECRET: ci-test-secret-not-for-production
 
     strategy:
       matrix:
@@ -30,11 +42,20 @@ jobs:
       - name: Type check (TypeScript)
         run: npm run check:portal
 
+      - name: Initialize isolated SQLite database
+        run: npm run init-db
+
       - name: Build Captive Portal
         run: npm run build:portal
 
       - name: Build Admin Dashboard
         run: npm run build:admin
 
-      - name: Initialize Database Smoke Test
-        run: npm run init-db
+      - name: Core portal and RADIUS contract test
+        run: npm run test:core
+
+      - name: HTTP routes and rate-limit smoke test
+        run: npm run test:rate-limits
+
+      - name: Check generated files for whitespace errors
+        run: git diff --check

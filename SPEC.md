@@ -1,5 +1,7 @@
 # WiFi Captive Portal + Admin Dashboard + FreeRADIUS
 
+> **Tài liệu lịch sử, không phải cấu hình triển khai.** Nội dung bên dưới mô tả bản thử nghiệm có Google OAuth và Node.js RADIUS server, hai thành phần không còn nằm trong runtime. Xem [docs/current-architecture.md](docs/current-architecture.md), README và các hướng dẫn router trong `docs/` để triển khai hệ thống hiện hành.
+
 **Version:** 1.0.0
 **Date:** 2026-08-27
 **Status:** Draft

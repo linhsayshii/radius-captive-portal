@@ -178,7 +178,9 @@ const adminQueries = {
   updateLastLogin: db.prepare('UPDATE admins SET last_login = CURRENT_TIMESTAMP WHERE id = ?'),
 };
 
-// OAuth whitelist
+// Legacy OAuth data is retained only for backwards-compatible SQLite reads.
+// There is no OAuth route in the current portal runtime. Remove this storage
+// only through a separately approved data migration.
 const oauthQueries = {
   getByEmail: db.prepare('SELECT * FROM oauth_whitelist WHERE google_email = ?'),
   getByUser: db.prepare('SELECT * FROM oauth_whitelist WHERE user_id = ?'),

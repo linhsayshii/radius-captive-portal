@@ -1,4 +1,6 @@
-# WiFi Captive Portal & RADIUS Server
+# WiFi Captive Portal — Historical Notes
+
+> **Không dùng tài liệu này để triển khai.** Nó mô tả bản thử nghiệm cũ có Google OAuth và Node.js RADIUS server. Runtime hiện hành dùng FreeRADIUS + MariaDB cho Auth/Accounting; Node.js chỉ phục vụ portal/admin, đồng bộ policy và gửi CoA/Disconnect. Xem `docs/current-architecture.md`, `README.md` và `docs/`.
 
 ## What is this?
 

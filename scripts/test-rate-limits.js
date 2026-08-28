@@ -71,6 +71,24 @@ async function runTests() {
     }
     assert(staticSuccess, 'Static files (/admin/admin-login.html) tải thành công 120/120 lần không bị 429');
 
+    // 1b. Keep stable admin aliases available after generated asset cleanup.
+    console.log('\n[Test 1b] Kiểm tra các URL quản trị ổn định...');
+    const adminIndex = await makeRequest(server, { path: '/admin/', method: 'GET' });
+    const adminPage = await makeRequest(server, { path: '/admin/admin.html', method: 'GET' });
+    const loginAlias = await makeRequest(server, { path: '/admin/login.html', method: 'GET' });
+    assert(
+      adminIndex.statusCode === 200 && adminIndex.body.includes('/admin/admin.html'),
+      'GET /admin/ vẫn chuyển đến dashboard hiện hành'
+    );
+    assert(
+      adminPage.statusCode === 200 && /\/admin\/assets\/admin-[^"']+\.js/.test(adminPage.body),
+      'GET /admin/admin.html vẫn tham chiếu bundle dashboard mới'
+    );
+    assert(
+      loginAlias.statusCode === 200 && loginAlias.body.includes('/admin/admin-login.html'),
+      'GET /admin/login.html vẫn chuyển đến trang đăng nhập hiện hành'
+    );
+
     // 2. Kiểm tra Auth brute force rate limiting
     console.log('\n[Test 2] Kiểm tra giới hạn đăng nhập (POST /auth/login)...');
     let hitRateLimit = false;
