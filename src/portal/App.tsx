@@ -114,17 +114,14 @@ function readPortalContext(): PortalContext {
     params.get("login_url") ||
     "";
 
-  if (!routerUrl && isAruba) {
-    // For Aruba Instant AP, swarm.cgi is the standard authentication endpoint.
-    // securelogin.arubanetworks.com is the default internal DNS & SSL cert hostname.
-    const proto = window.location.protocol === "https:" ? "https:" : "http:";
-    if (switchIp && switchIp.startsWith("http")) {
+  if (!routerUrl && switchIp) {
+    if (switchIp.startsWith("http://") || switchIp.startsWith("https://")) {
       const clean = switchIp.replace(/\/+$/, "");
-      routerUrl = clean.endsWith("/swarm.cgi") ? clean : `${clean}/swarm.cgi`;
-    } else if (switchIp) {
-      routerUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
+      routerUrl = clean.endsWith("/cgi-bin/login") || clean.endsWith("/swarm.cgi")
+        ? clean
+        : `${clean}/cgi-bin/login`;
     } else {
-      routerUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
+      routerUrl = `http://${switchIp}/cgi-bin/login`;
     }
   }
 
@@ -148,11 +145,7 @@ function updateMode(mode?: "account" | "packages") {
 }
 
 function postLoginToRouter(context: PortalContext) {
-  let targetUrl = context.routerUrl;
-  if (!targetUrl && context.isAruba) {
-    const proto = window.location.protocol === "https:" ? "https:" : "http:";
-    targetUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
-  }
+  const targetUrl = context.routerUrl;
 
   if (!targetUrl) {
     if (context.destination && context.destination.startsWith("http")) {
