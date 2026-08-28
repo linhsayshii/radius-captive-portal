@@ -13,7 +13,23 @@ sql {
   group_attribute = "SQL-Group"
   authorize_check_query = "SELECT c.id, c.username, c.attribute, c.value, c.op FROM radcheck c INNER JOIN radius_authorizations a ON a.mac_address = c.username WHERE c.username = REPLACE(REPLACE(REPLACE('%{SQL-User-Name}', ':', ''), '-', ''), '.', '') AND a.expires_at > UTC_TIMESTAMP() ORDER BY c.id"
   authorize_reply_query = "SELECT r.id, r.username, r.attribute, r.value, r.op FROM radreply r INNER JOIN radius_authorizations a ON a.mac_address = r.username WHERE r.username = REPLACE(REPLACE(REPLACE('%{SQL-User-Name}', ':', ''), '-', ''), '.', '') AND a.expires_at > UTC_TIMESTAMP() ORDER BY r.id"
-  accounting_start_query = "INSERT INTO radacct (acctsessionid, username, nasipaddress, callingstationid, acctstarttime) VALUES ('%{Acct-Session-Id}', '%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}', NOW()) ON DUPLICATE KEY UPDATE acctstarttime = NOW()"
-  accounting_update_query = "UPDATE radacct SET acctsessiontime = '%{Acct-Session-Time}', acctinputoctets = '%{Acct-Input-Octets}', acctoutputoctets = '%{Acct-Output-Octets}', acctstoptime = NULL WHERE acctsessionid = '%{Acct-Session-Id}'"
-  accounting_stop_query = "UPDATE radacct SET acctstoptime = NOW(), acctsessiontime = '%{Acct-Session-Time}', acctinputoctets = '%{Acct-Input-Octets}', acctoutputoctets = '%{Acct-Output-Octets}' WHERE acctsessionid = '%{Acct-Session-Id}'"
+  # FreeRADIUS 3 no longer invokes the legacy accounting_*_query
+  # settings. Queries must live in the Accounting status-type tree below;
+  # without it, authentication succeeds but Accounting-Request packets never
+  # create rows in radacct.
+  accounting {
+    reference = "%{tolower:type.%{Acct-Status-Type}.query}"
+    type {
+      start {
+        query = "INSERT INTO radacct (acctsessionid, username, nasipaddress, callingstationid, acctstarttime) VALUES ('%{Acct-Session-Id}', '%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}', NOW()) ON DUPLICATE KEY UPDATE username = VALUES(username), nasipaddress = VALUES(nasipaddress), callingstationid = VALUES(callingstationid), acctstarttime = NOW(), acctstoptime = NULL"
+      }
+      interim-update {
+        query = "UPDATE radacct SET acctsessiontime = '%{Acct-Session-Time}', acctinputoctets = '%{Acct-Input-Octets}', acctoutputoctets = '%{Acct-Output-Octets}', acctstoptime = NULL WHERE acctsessionid = '%{Acct-Session-Id}'"
+        query = "INSERT INTO radacct (acctsessionid, username, nasipaddress, callingstationid, acctstarttime, acctsessiontime, acctinputoctets, acctoutputoctets) VALUES ('%{Acct-Session-Id}', '%{User-Name}', '%{NAS-IP-Address}', '%{Calling-Station-Id}', NOW() - INTERVAL '%{Acct-Session-Time}' SECOND, '%{Acct-Session-Time}', '%{Acct-Input-Octets}', '%{Acct-Output-Octets}')"
+      }
+      stop {
+        query = "UPDATE radacct SET acctstoptime = NOW(), acctsessiontime = '%{Acct-Session-Time}', acctinputoctets = '%{Acct-Input-Octets}', acctoutputoctets = '%{Acct-Output-Octets}' WHERE acctsessionid = '%{Acct-Session-Id}'"
+      }
+    }
+  }
 }

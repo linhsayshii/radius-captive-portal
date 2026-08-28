@@ -292,7 +292,7 @@ function LiveSpeedBadge({ downKbps, upKbps }: { downKbps?: number; upKbps?: numb
         className={`inline-block size-2 rounded-full transition-colors ${
           isTransmitting ? "bg-emerald-500 animate-pulse" : "bg-zinc-300 dark:bg-zinc-600"
         }`}
-        title={isTransmitting ? "Đang truyền tải dữ liệu" : "Đang nghỉ"}
+        title={isTransmitting ? "Tốc độ trung bình từ bản cập nhật Accounting gần nhất" : "Đang nghỉ hoặc chưa có số liệu Accounting mới"}
       />
       <span className={down > 0 ? "font-semibold text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
         ↓ {formatSpeed(down)}
@@ -902,7 +902,7 @@ function SessionsView({ sessions, accounting, isLoading, onTerminate }: { sessio
         <div className="flex items-center justify-between gap-4">
           <div className="flex flex-col gap-1">
             <CardTitle>Phiên đang hoạt động</CardTitle>
-            <CardDescription>Ngắt phiên sẽ gửi tín hiệu RADIUS Disconnect (RFC 5176) để router ngắt thiết bị ngay lập tức.</CardDescription>
+            <CardDescription>Tốc độ là trung bình theo Accounting của router (đang đặt mỗi 60 giây). Ngắt phiên sẽ gửi tín hiệu RADIUS Disconnect (RFC 5176).</CardDescription>
           </div>
         </div>
       </CardHeader>

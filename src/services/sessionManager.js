@@ -209,28 +209,48 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
   let rateDownKbps = 0;
   let rateUpKbps = 0;
   let bytesChanged = false;
+  let observedElapsedSec = 0;
 
   if (metric) {
+    // The dashboard polls the session API more often than the NAS sends
+    // Interim-Updates. Measure between counter changes, not between polls;
+    // otherwise a 60-second Accounting delta is incorrectly reported as a
+    // 5-second burst whenever an administrator has this page open.
     const elapsedSec = Math.max(1, (now - metric.lastTimestamp) / 1000);
+    observedElapsedSec = Math.max(1, (now - metric.lastObservedTimestamp) / 1000);
     const inDelta = Math.max(0, inputOctets - metric.lastInputOctets);
     const outDelta = Math.max(0, outputOctets - metric.lastOutputOctets);
     bytesChanged = inDelta + outDelta >= ACTIVITY_THRESHOLD;
 
-    rateDownKbps = Math.round((inDelta * 8) / (elapsedSec * 1024));
-    rateUpKbps = Math.round((outDelta * 8) / (elapsedSec * 1024));
-
-    metric.lastInputOctets = inputOctets;
-    metric.lastOutputOctets = outputOctets;
-    metric.lastTimestamp = now;
-    metric.rateDownKbps = rateDownKbps;
-    metric.rateUpKbps = rateUpKbps;
+    if (inDelta > 0 || outDelta > 0) {
+      rateDownKbps = Math.round((inDelta * 8) / (elapsedSec * 1024));
+      rateUpKbps = Math.round((outDelta * 8) / (elapsedSec * 1024));
+      metric.lastInputOctets = inputOctets;
+      metric.lastOutputOctets = outputOctets;
+      metric.lastTimestamp = now;
+      metric.rateDownKbps = rateDownKbps;
+      metric.rateUpKbps = rateUpKbps;
+    }
+    metric.lastObservedTimestamp = now;
     metric.totalInputBytes = inputOctets;
     metric.totalOutputBytes = outputOctets;
+
+    if (!bytesChanged && inDelta === 0 && outDelta === 0) {
+      // Idle time must reflect real wall time. The previous fixed 30-second
+      // increment expired sessions much too quickly when this endpoint was
+      // refreshed every five seconds.
+      sessions.update.run({
+        ...session,
+        idle_seconds: (session.idle_seconds || 0) + Math.round(observedElapsedSec),
+      });
+      return;
+    }
   } else {
     metric = {
       lastInputOctets: inputOctets,
       lastOutputOctets: outputOctets,
       lastTimestamp: now,
+      lastObservedTimestamp: now,
       rateDownKbps: 0,
       rateUpKbps: 0,
       totalInputBytes: inputOctets,
@@ -250,10 +270,11 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
       quota_used_mb: Math.floor(currentTotalBytes / (1024 * 1024)),
     });
   } else {
-    // User is idle - increment idle counter
+    // A small counter change below ACTIVITY_THRESHOLD is still observed, but
+    // it does not constitute meaningful traffic for the idle policy.
     sessions.update.run({
       ...session,
-      idle_seconds: (session.idle_seconds || 0) + 30,
+      idle_seconds: (session.idle_seconds || 0) + Math.round(observedElapsedSec),
     });
   }
 }
