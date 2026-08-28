@@ -79,7 +79,7 @@ Chạy các lệnh sau trong **Terminal** của RouterOS:
 /radius incoming set accept=yes port=3799
 
 # 3. Kích hoạt RADIUS và gửi Accounting định kỳ trong Hotspot Profile
-/ip hotspot profile set [find default=yes] use-radius=yes radius-accounting=yes radius-interim-update=1m login-by=http-pap
+/ip hotspot profile set [find default=yes] use-radius=yes radius-accounting=yes radius-interim-update=received login-by=http-pap
 /ip hotspot user profile set [find default=yes] session-timeout=1d
 
 # 4. Walled Garden cho máy chủ Portal

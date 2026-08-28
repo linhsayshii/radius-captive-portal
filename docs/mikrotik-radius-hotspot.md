@@ -100,7 +100,7 @@ Ví dụ tạo profile `hsprof1` và server `hotspot1`:
 
 ```routeros
 /ip hotspot profile
-add name=hsprof1 hotspot-address=10.37.3.1 dns-name=hotspot.hnglinh.io.vn login-by=https,http-pap ssl-certificate=HOTSPOT_CERTIFICATE use-radius=yes radius-accounting=yes radius-interim-update=1m
+add name=hsprof1 hotspot-address=10.37.3.1 dns-name=hotspot.hnglinh.io.vn login-by=https,http-pap ssl-certificate=HOTSPOT_CERTIFICATE use-radius=yes radius-accounting=yes radius-interim-update=received
 
 /ip hotspot
 add name=hotspot1 interface=guest_captive address-pool=dhcp_guest profile=hsprof1 disabled=no
@@ -110,7 +110,7 @@ Nếu hai object đã tồn tại, dùng `set` thay cho `add`:
 
 ```routeros
 /ip hotspot profile
-set hsprof1 hotspot-address=10.37.3.1 dns-name=hotspot.hnglinh.io.vn login-by=https,http-pap ssl-certificate=HOTSPOT_CERTIFICATE use-radius=yes radius-accounting=yes radius-interim-update=1m
+set hsprof1 hotspot-address=10.37.3.1 dns-name=hotspot.hnglinh.io.vn login-by=https,http-pap ssl-certificate=HOTSPOT_CERTIFICATE use-radius=yes radius-accounting=yes radius-interim-update=received
 ```
 
 `dns-name` tự tạo DNS entry của HotSpot. Từ Guest VLAN, hostname phải resolve
@@ -211,6 +211,10 @@ Trên MikroTik, chỉ thêm service nếu chưa có RADIUS `hotspot` trỏ đún
 
 FreeRADIUS trả `Session-Timeout`, `Idle-Timeout`, `Acct-Interim-Interval` và
 `Mikrotik-Rate-Limit`; RouterOS áp thời lượng, accounting và tốc độ cho session.
+Đặt `radius-interim-update=received` để MikroTik dùng giá trị
+`Acct-Interim-Interval` do RADIUS trả về. Project mặc định trả **10 giây** qua
+`RADIUS_INTERIM_INTERVAL_SECONDS=10`; đây là chu kỳ dashboard nhận số liệu
+gần real-time.
 
 ## 9. Loại Guest khỏi PCC/multi-WAN mangle
 

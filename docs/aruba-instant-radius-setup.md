@@ -241,5 +241,5 @@ Kiểm tra trên Aruba: **Configuration → Networks → SSID → Security tab**
 - [ ] Logs thấy `Access-Accept` (không phải `Access-Reject`)
 - [ ] Client có thể truy cập Internet sau khi đăng nhập
 - [ ] CoA port 3799 mở trên Aruba
-- [ ] Accounting interim (port 1813) hoạt động — thấy gói Update trong logs mỗi phút
+- [ ] Accounting interim (port 1813) hoạt động — thấy gói Update trong logs mỗi 10 giây
 - [ ] Walled Garden đúng — `captive.apple.com` redirect về portal

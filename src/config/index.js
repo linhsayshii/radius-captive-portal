@@ -23,6 +23,10 @@ function loadConfig() {
     radiusAuthPort: parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10),
     radiusAccountingPort: parseInt(process.env.RADIUS_ACCOUNTING_PORT || '1813', 10),
     radiusCoaPort: parseInt(process.env.RADIUS_COA_PORT || '3799', 10),
+    // RouterOS and FreeRADIUS both accept this standard RADIUS reply. Keep
+    // the configured value sensible: shorter intervals produce much more
+    // MariaDB write traffic without materially improving the dashboard.
+    radiusInterimIntervalSeconds: Math.min(3600, Math.max(5, parseInt(process.env.RADIUS_INTERIM_INTERVAL_SECONDS || '10', 10) || 10)),
     radiusClients: parseCsv(process.env.RADIUS_CLIENTS),
     // FreeRADIUS policy store. This is deliberately separate from the portal
     // SQLite database: FreeRADIUS uses MySQL/MariaDB through rlm_sql.
@@ -38,9 +42,6 @@ function loadConfig() {
     rateLimitApiMax: parseInt(process.env.RATE_LIMIT_API_MAX || '1200', 10),
     rateLimitAuthMax: parseInt(process.env.RATE_LIMIT_AUTH_MAX || '20', 10),
     rateLimitGuestMax: parseInt(process.env.RATE_LIMIT_GUEST_MAX || '60', 10),
-    // RFC 8910 Captive Portal API. This is the local HotSpot login URL so
-    // MikroTik can attach client-specific login parameters before redirecting.
-    captivePortalUserUrl: process.env.CAPTIVE_PORTAL_USER_URL || 'http://10.37.3.1/login',
   };
 }
 

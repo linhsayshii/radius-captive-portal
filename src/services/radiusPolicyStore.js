@@ -31,7 +31,8 @@ async function upsertAuthorization(entry) {
   const username = entry.mac_address;
   const expiresAt = new Date(entry.expires_at);
   const seconds = Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
-  const replies = [reply('Session-Timeout', seconds), reply('Idle-Timeout', 300), reply('Acct-Interim-Interval', 60)];
+  const { radiusInterimIntervalSeconds } = loadConfig();
+  const replies = [reply('Session-Timeout', seconds), reply('Idle-Timeout', 300), reply('Acct-Interim-Interval', radiusInterimIntervalSeconds)];
 
   if (entry.bandwidth_up_kbps && entry.bandwidth_down_kbps) {
     replies.push(reply('Mikrotik-Rate-Limit', `${entry.bandwidth_up_kbps}k/${entry.bandwidth_down_kbps}k`));

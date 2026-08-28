@@ -1440,7 +1440,7 @@ function SettingsView({
 /radius incoming set accept=yes port=${config?.radius.coaPort || 3799}
 
 # 3. Kích hoạt RADIUS và gửi Accounting định kỳ trong Hotspot Profile
-/ip hotspot profile set [find default=yes] use-radius=yes radius-accounting=yes radius-interim-update=1m login-by=http-pap
+/ip hotspot profile set [find default=yes] use-radius=yes radius-accounting=yes radius-interim-update=received login-by=http-pap
 /ip hotspot user profile set [find default=yes] session-timeout=1d
 
 # 4. Thêm Walled Garden cho máy chủ Portal (cho phép mở trang login trước khi kết nối)
@@ -1468,7 +1468,7 @@ function SettingsView({
                 <ol className="list-inside list-decimal space-y-1.5 text-muted-foreground text-xs leading-relaxed">
                   <li><strong>Khai báo RADIUS:</strong> Vào menu <code>Radius</code> → Nhấn dấu <code>+</code> → Tích chọn <code>hotspot</code> → Điền Address: <code>{effectiveServerIp}</code>, Secret: <code>RADIUS_SECRET</code>, Auth Port: <code>{config?.radius.authPort || 1812}</code>, Acct Port: <code>{config?.radius.accountingPort || 1813}</code>.</li>
                   <li><strong>Bật Incoming CoA:</strong> Vào <code>Radius</code> → Nhấn nút <code>Incoming</code> → Tích chọn <code>Accept</code> và nhập Port: <code>{config?.radius.coaPort || 3799}</code> (để Server ngắt kết nối tập trung).</li>
-                  <li><strong>Kích hoạt trên Hotspot:</strong> Vào <code>IP</code> → <code>Hotspot</code> → <code>Server Profiles</code> → Chọn profile → Tab <code>RADIUS</code> (Tích chọn <code>Use RADIUS</code>, <code>Accounting</code>, Interim Update: <code>1m</code>) → Tab <code>Login</code> (Chọn <code>HTTP PAP</code>).</li>
+                  <li><strong>Kích hoạt trên Hotspot:</strong> Vào <code>IP</code> → <code>Hotspot</code> → <code>Server Profiles</code> → Chọn profile → Tab <code>RADIUS</code> (Tích chọn <code>Use RADIUS</code>, <code>Accounting</code>, Interim Update: <code>received</code>) → Tab <code>Login</code> (Chọn <code>HTTP PAP</code>).</li>
                   <li><strong>Walled Garden:</strong> Vào <code>IP</code> → <code>Hotspot</code> → <code>Walled Garden IP List</code> → Thêm Dst. Address: <code>{effectiveServerIp}</code> với Action: <code>accept</code>.</li>
                 </ol>
               </div>
@@ -1489,7 +1489,7 @@ function SettingsView({
                   <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
                     <li>Vào Profiles → RADIUS Profile → Nhập Server IP (<code>{effectiveServerIp}</code>) và Secret</li>
                     <li>Hotspot / Guest Control → Bật External Portal Server (<code>{effectivePortalUrl}</code>)</li>
-                    <li>Accounting: Bật Interim Update interval 60s</li>
+                    <li>Accounting: chọn Interim Update <code>received</code>; RADIUS cấp interval 10 giây.</li>
                   </ul>
                 </div>
               </div>
