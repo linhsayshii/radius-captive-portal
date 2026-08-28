@@ -14,12 +14,16 @@ const COA_NACK = 45;
 // Standard Attribute Types (RFC 2865, RFC 2866, RFC 5176)
 const ATTR_USER_NAME = 1;
 const ATTR_NAS_IP = 4;
+const ATTR_NAS_PORT = 5;
 const ATTR_FRAMED_IP = 8;
 const ATTR_REPLY_MESSAGE = 18;
 const ATTR_SESSION_TIMEOUT = 27;
 const ATTR_IDLE_TIMEOUT = 28;
 const ATTR_CALLING_STATION_ID = 31;
 const ATTR_ACCT_SESSION_ID = 44;
+const ATTR_NAS_PORT_TYPE = 61;
+const ATTR_NAS_PORT_ID = 87;
+const ATTR_CALLED_STATION_ID = 30;
 const ATTR_ERROR_CAUSE = 101;
 const ATTR_VENDOR_SPECIFIC = 26;
 
@@ -61,6 +65,19 @@ function ipv4ToBuffer(ipStr) {
   return Buffer.from(parts);
 }
 
+function nasPortTypeToNumber(value) {
+  if (Number.isInteger(Number(value))) return Number(value);
+  const normalized = String(value || '').trim().toLowerCase();
+  const knownTypes = {
+    ethernet: 15,
+    cable: 17,
+    'wireless-other': 18,
+    'wireless-802.11': 19,
+    wireless: 19,
+  };
+  return knownTypes[normalized] ?? null;
+}
+
 // The portal stores MAC addresses in canonical separator-free form, while a
 // NAS can require the Calling-Station-Id format configured in its Hotspot
 // profile. MikroTik in this deployment uses XX:XX:XX:XX:XX:XX for Dynamic
@@ -73,21 +90,6 @@ function formatCallingStationId(value) {
   return normalized.match(/.{2}/g).join(':').toUpperCase();
 }
 
-const DYN_AUTH_ERROR_CAUSES = {
-  401: 'Router không hỗ trợ thuộc tính trong yêu cầu ngắt',
-  402: 'Yêu cầu ngắt thiếu thuộc tính nhận diện phiên',
-  403: 'Thông tin NAS trong yêu cầu ngắt không khớp',
-  404: 'Router cho rằng yêu cầu ngắt không hợp lệ',
-  405: 'Router chưa cho phép RADIUS Disconnect. Kiểm tra /radius incoming accept=yes',
-  406: 'Router không hỗ trợ phần mở rộng RADIUS này',
-  407: 'Router từ chối giá trị thuộc tính dùng để nhận diện phiên',
-  501: 'Router không cho phép thực hiện yêu cầu ngắt',
-  502: 'Router không định tuyến được yêu cầu ngắt',
-  503: 'Router không tìm thấy phiên đang hoạt động tương ứng',
-  504: 'Router không thể xóa phiên đang hoạt động',
-  506: 'Router hiện không đủ tài nguyên để xử lý yêu cầu ngắt',
-};
-
 function parseErrorCause(attributeBuffer) {
   for (let offset = 0; offset + 2 <= attributeBuffer.length;) {
     const type = attributeBuffer.readUInt8(offset);
@@ -99,13 +101,6 @@ function parseErrorCause(attributeBuffer) {
     offset += length;
   }
   return null;
-}
-
-function describeDynAuthNack(errorCause) {
-  if (!errorCause) return 'Router từ chối lệnh ngắt/thay đổi (NACK)';
-  return DYN_AUTH_ERROR_CAUSES[errorCause]
-    ? `${DYN_AUTH_ERROR_CAUSES[errorCause]} (RADIUS Error-Cause ${errorCause})`
-    : `Router từ chối lệnh ngắt/thay đổi (RADIUS Error-Cause ${errorCause})`;
 }
 
 function buildVsa(vendorId, vendorType, valueBuffer) {
@@ -154,10 +149,31 @@ function buildAttributeBuffers(attrs) {
         valBuf = ipv4ToBuffer(value);
         if (!valBuf) continue;
         break;
+      case 'NAS-Port':
+        type = ATTR_NAS_PORT;
+        valBuf = Buffer.alloc(4);
+        valBuf.writeUInt32BE(Number(value) >>> 0, 0);
+        break;
       case 'Framed-IP-Address':
         type = ATTR_FRAMED_IP;
         valBuf = ipv4ToBuffer(value);
         if (!valBuf) continue;
+        break;
+      case 'NAS-Port-Type': {
+        const portType = nasPortTypeToNumber(value);
+        if (portType === null) continue;
+        type = ATTR_NAS_PORT_TYPE;
+        valBuf = Buffer.alloc(4);
+        valBuf.writeUInt32BE(portType, 0);
+        break;
+      }
+      case 'NAS-Port-Id':
+        type = ATTR_NAS_PORT_ID;
+        valBuf = Buffer.from(String(value), 'utf8');
+        break;
+      case 'Called-Station-Id':
+        type = ATTR_CALLED_STATION_ID;
+        valBuf = Buffer.from(String(value), 'utf8');
         break;
       case 'Session-Timeout':
         type = ATTR_SESSION_TIMEOUT;
@@ -341,8 +357,8 @@ async function sendDynAuthPacket(nasIp, code, attributes, timeoutMs = 4000) {
         resolve({ success: true, code: respCode });
       } else if (respCode === DISCONNECT_NACK || respCode === COA_NACK) {
         const errorCause = parseErrorCause(respAttrs);
-        logger.warn(`RADIUS DynAuth REJECTED by ${nasIp} (Code: ${respCode}, Error-Cause: ${errorCause || 'none'})`);
-        resolve({ success: false, error: describeDynAuthNack(errorCause), code: respCode, errorCause });
+        logger.warn(`RADIUS DynAuth REJECTED by ${nasIp} (Code: ${respCode})`);
+        resolve({ success: false, error: 'Router từ chối lệnh ngắt/thay đổi (NACK)', code: respCode, errorCause });
       } else {
         logger.warn(`RADIUS DynAuth unexpected response code: ${respCode} from ${nasIp}`);
         resolve({ success: false, error: `Phản hồi không xác định: ${respCode}`, code: respCode });
@@ -396,11 +412,13 @@ async function disconnectSession(target, legacyNasIp) {
     logger.info(`Sending RADIUS Disconnect-Request to NAS ${nasIp} using ${selector.label}`, selector.attributes);
     const result = await sendDynAuthPacket(nasIp, DISCONNECT_REQUEST, selector.attributes);
     if (result.success || result.code !== DISCONNECT_NACK || result.errorCause === 405) {
-      return { ...result, selector: selector.label };
+      const { errorCause, ...response } = result;
+      return response;
     }
-    lastResult = { ...result, selector: selector.label };
+    lastResult = result;
   }
-  return lastResult;
+  const { errorCause, ...response } = lastResult;
+  return response;
 }
 
 // Some NAS implementations require a single selector, and reject a request
@@ -411,8 +429,22 @@ function buildDisconnectSelectors(target) {
   const sessionId = target.sessionId || target.session_id;
   const username = target.username;
   const macAddress = formatCallingStationId(target.macAddress || target.mac_address);
+  const fullContext = {
+    'Acct-Session-Id': sessionId,
+    'User-Name': username,
+    'NAS-IP-Address': target.nasIp || target.nas_identifier,
+    'NAS-Port': target.nasPort || target.nas_port,
+    'NAS-Port-Type': target.nasPortType || target.nas_port_type,
+    'NAS-Port-Id': target.nasPortId || target.nas_port_id,
+    'Framed-IP-Address': target.ipAddress || target.ip_address,
+    'Calling-Station-Id': macAddress,
+    'Called-Station-Id': target.calledStationId || target.called_station_id,
+  };
   const selectors = [];
 
+  if (sessionId && fullContext['NAS-Port'] && fullContext['NAS-Port-Type'] && fullContext['Framed-IP-Address'] && fullContext['Called-Station-Id']) {
+    selectors.push({ label: 'MikroTik session context', attributes: fullContext });
+  }
   if (sessionId) selectors.push({ label: 'Acct-Session-Id', attributes: { 'Acct-Session-Id': sessionId } });
   if (username && macAddress) selectors.push({
     label: 'User-Name + Calling-Station-Id',
@@ -473,8 +505,6 @@ module.exports = {
   buildRfc5176Packet,
   formatCallingStationId,
   buildDisconnectSelectors,
-  parseErrorCause,
-  describeDynAuthNack,
   DISCONNECT_REQUEST,
   DISCONNECT_ACK,
   DISCONNECT_NACK,

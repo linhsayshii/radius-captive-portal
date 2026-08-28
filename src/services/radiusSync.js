@@ -177,6 +177,11 @@ async function disconnectActiveAuthorizations(macAddresses) {
         nasIp: record.nasipaddress,
         username: record.username,
         macAddress,
+        ipAddress: record.framedipaddress,
+        nasPort: record.nasport,
+        nasPortType: record.nasporttype,
+        nasPortId: record.nasportid,
+        calledStationId: record.calledstationid,
       });
       if (result.success) disconnected += 1;
     } catch (error) {

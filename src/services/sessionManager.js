@@ -124,6 +124,10 @@ async function terminateSession(session, reason, { allowLocalTermination = false
         username: session.username,
         macAddress: session.mac_address,
         ipAddress: session.ip_address,
+        nasPort: session.nas_port,
+        nasPortType: session.nas_port_type,
+        nasPortId: session.nas_port_id,
+        calledStationId: session.called_station_id,
       });
 
       disconnect = { attempted: true, ...result };

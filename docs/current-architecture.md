@@ -16,7 +16,7 @@ Thiết bị
 - Portal ghi quyền MAC vào SQLite rồi đồng bộ sang MariaDB; FreeRADIUS đọc policy đó cho Access-Accept.
 - `radacct` là nguồn dữ liệu phiên thực tế. Portal đồng bộ về SQLite để hiển thị dashboard, quota và trạng thái thiết bị.
 - `RADIUS_INTERIM_INTERVAL_SECONDS` mặc định là 10 giây. Router/AP có thể áp dụng mức tối thiểu riêng; tốc độ hiển thị là trung bình theo các Accounting update, không phải đo gói tin từng giây.
-- Node.js chỉ gửi CoA/Disconnect đến NAS qua UDP 3799. Đây là client outbound, không cần mở cổng 3799 trên container Node.
+- Node.js chỉ gửi CoA/Disconnect đến NAS qua `RADIUS_COA_PORT`. Đây là client outbound, không cần mở cổng đó trên container Node. RouterOS mặc định nghe `/radius incoming` ở UDP 1700, còn 3799 là cổng CoA thông dụng; hai phía phải dùng cùng một giá trị.
 
 Kiểm tra trước khi triển khai:
 

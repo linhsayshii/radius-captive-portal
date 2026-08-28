@@ -23,8 +23,6 @@ const {
   COA_REQUEST,
   formatCallingStationId,
   buildDisconnectSelectors,
-  parseErrorCause,
-  describeDynAuthNack,
 } = require('../src/services/radiusClient');
 
 function readAttributes(packet) {
@@ -85,18 +83,22 @@ function testDynamicAuthorizationPackets() {
     sessionId: 'session-test-1',
     username: 'test-account',
     macAddress: 'aa-bb-cc-dd-ee-ff',
+    nasIp: '192.168.88.1',
+    nasPort: '12',
+    nasPortType: 'Wireless-802.11',
+    nasPortId: 'wlan1',
+    ipAddress: '192.168.88.20',
+    calledStationId: 'hotspot1',
   });
   assert.deepStrictEqual(selectors.map((selector) => selector.label), [
+    'MikroTik session context',
     'Acct-Session-Id',
     'User-Name + Calling-Station-Id',
     'Calling-Station-Id',
     'User-Name',
   ]);
-  assert.strictEqual(selectors[2].attributes['Calling-Station-Id'], 'AA:BB:CC:DD:EE:FF');
-
-  const errorCause = Buffer.from([101, 6, 0, 0, 1, 247]);
-  assert.strictEqual(parseErrorCause(errorCause), 503);
-  assert.match(describeDynAuthNack(503), /không tìm thấy phiên/);
+  assert.strictEqual(selectors[0].attributes['Calling-Station-Id'], 'AA:BB:CC:DD:EE:FF');
+  assert.strictEqual(selectors[0].attributes['NAS-Port-Type'], 'Wireless-802.11');
 
   const coa = buildRfc5176Packet(COA_REQUEST, 18, {
     'Acct-Session-Id': 'session-test-1',

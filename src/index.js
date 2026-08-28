@@ -4,6 +4,7 @@ const logger = require('./utils/logger');
 const { startRadiusSyncWorker, stopRadiusSyncWorker } = require('./services/radiusSync');
 const { startRadiusAccountingSync, stopRadiusAccountingSync } = require('./services/radiusAccountingSync');
 const { startIdleChecker, stopIdleChecker } = require('./services/sessionManager');
+const { ensureAccountingSchema } = require('./services/radiusPolicyStore');
 
 const config = loadConfig();
 
@@ -51,6 +52,10 @@ async function bootstrap() {
   if (configurationErrors.length) {
     throw new Error(`Invalid runtime configuration: ${configurationErrors.join('; ')}`);
   }
+
+  // Upgrade the shared Accounting table before FreeRADIUS receives the next
+  // Interim-Update. RouterOS Disconnect requires this full session context.
+  await ensureAccountingSchema();
 
   const httpServer = await startHttpServer();
   startRadiusSyncWorker();

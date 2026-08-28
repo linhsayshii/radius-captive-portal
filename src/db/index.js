@@ -62,6 +62,17 @@ try {
   db.exec(`ALTER TABLE mac_authorizations ADD COLUMN max_devices INTEGER;`);
 } catch (_) {}
 
+for (const definition of [
+  'nas_port TEXT',
+  'nas_port_type TEXT',
+  'nas_port_id TEXT',
+  'called_station_id TEXT',
+]) {
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN ${definition};`);
+  } catch (_) {}
+}
+
 // Durable synchronization queue for the separate FreeRADIUS policy database.
 // SQLite remains the source of truth; every desired RADIUS change is retried
 // until it has been materialized in MariaDB.

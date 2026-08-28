@@ -2,6 +2,7 @@ const mysql = require('mysql2/promise');
 const { loadConfig } = require('../config');
 
 let pool;
+let accountingSchemaReady;
 
 function getPool() {
   const { radiusDatabaseUrl } = loadConfig();
@@ -16,6 +17,23 @@ function getPool() {
     pool = mysql.createPool(radiusDatabaseUrl);
   }
   return pool;
+}
+
+async function ensureAccountingSchema() {
+  if (!accountingSchemaReady) {
+    accountingSchemaReady = Promise.all([
+      'nasport VARCHAR(32) NOT NULL DEFAULT \'\'',
+      'nasportid VARCHAR(255) NOT NULL DEFAULT \'\'',
+      'nasporttype VARCHAR(64) NOT NULL DEFAULT \'\'',
+      'framedipaddress VARCHAR(45) NOT NULL DEFAULT \'\'',
+      'calledstationid VARCHAR(255) NOT NULL DEFAULT \'\'',
+    ].map((definition) => getPool().query(`ALTER TABLE radacct ADD COLUMN IF NOT EXISTS ${definition}`)))
+      .catch((error) => {
+        accountingSchemaReady = undefined;
+        throw error;
+      });
+  }
+  await accountingSchemaReady;
 }
 
 function reply(attribute, value, op = ':=') {
@@ -90,9 +108,11 @@ async function removeAuthorization(macAddress) {
 }
 
 async function getRecentAccounting() {
+  await ensureAccountingSchema();
   const db = getPool();
   const [rows] = await db.execute(`
-    SELECT acctsessionid, username, nasipaddress, callingstationid,
+    SELECT acctsessionid, username, nasipaddress, nasport, nasportid, nasporttype,
+      framedipaddress, callingstationid, calledstationid,
       acctstarttime, acctstoptime, acctsessiontime, acctinputoctets, acctoutputoctets
     FROM radacct
     WHERE acctstoptime IS NULL
@@ -105,6 +125,7 @@ async function getRecentAccounting() {
 async function close() {
   if (pool) await pool.end();
   pool = undefined;
+  accountingSchemaReady = undefined;
 }
 
-module.exports = { upsertAuthorization, removeAuthorization, getRecentAccounting, close };
+module.exports = { upsertAuthorization, removeAuthorization, getRecentAccounting, ensureAccountingSchema, close };

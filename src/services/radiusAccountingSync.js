@@ -26,15 +26,20 @@ function toSqliteDate(value) {
 }
 
 const upsertSessionFromRadius = db.prepare(`
-  INSERT INTO sessions (user_id, package_id, mac_address, ip_address, nas_identifier,
+  INSERT INTO sessions (user_id, package_id, mac_address, ip_address, nas_identifier, nas_port,
+    nas_port_type, nas_port_id, called_station_id,
     username, session_id, quota_total_mb, quota_used_mb, bandwidth_down_kbps,
     bandwidth_up_kbps, is_active, start_time, last_activity, end_time, terminated_by)
-  VALUES (@user_id, @package_id, @mac_address, @ip_address, @nas_identifier,
+  VALUES (@user_id, @package_id, @mac_address, @ip_address, @nas_identifier, @nas_port,
+    @nas_port_type, @nas_port_id, @called_station_id,
     @username, @session_id, @quota_total_mb, @quota_used_mb, @bandwidth_down_kbps,
     @bandwidth_up_kbps, @is_active, @start_time, @last_activity, @end_time, @terminated_by)
   ON CONFLICT(session_id) DO UPDATE SET
     user_id = excluded.user_id, package_id = excluded.package_id, mac_address = excluded.mac_address,
-    nas_identifier = excluded.nas_identifier, username = excluded.username,
+    nas_identifier = excluded.nas_identifier, nas_port = excluded.nas_port,
+    nas_port_type = excluded.nas_port_type, nas_port_id = excluded.nas_port_id,
+    called_station_id = excluded.called_station_id, ip_address = excluded.ip_address,
+    username = excluded.username,
     quota_total_mb = excluded.quota_total_mb, quota_used_mb = excluded.quota_used_mb,
     bandwidth_down_kbps = excluded.bandwidth_down_kbps, bandwidth_up_kbps = excluded.bandwidth_up_kbps,
     is_active = excluded.is_active, last_activity = excluded.last_activity,
@@ -73,8 +78,12 @@ async function performRadiusAccountingSync() {
           user_id: authorization?.user_id || null,
           package_id: authorization?.package_id || null,
           mac_address: macAddress,
-          ip_address: null,
+          ip_address: record.framedipaddress || null,
           nas_identifier: record.nasipaddress || null,
+          nas_port: record.nasport || null,
+          nas_port_type: record.nasporttype || null,
+          nas_port_id: record.nasportid || null,
+          called_station_id: record.calledstationid || null,
           username: record.username || macAddress,
           session_id: record.acctsessionid,
           quota_total_mb: authorization?.quota_mb || null,
