@@ -109,6 +109,19 @@ type Session = {
   total_bytes_in?: number;
   total_bytes_out?: number;
 };
+type AccountingStatus = {
+  state: "idle" | "syncing" | "ok" | "error";
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  records: number;
+  synchronized: number;
+  skipped: number;
+  error: string | null;
+};
+type SessionsResponse = {
+  sessions: Session[];
+  accounting: AccountingStatus;
+};
 type Device = {
   mac_address: string;
   username: string | null;
@@ -143,6 +156,7 @@ type MacAuthorization = {
 type DataState = {
   stats: Stats;
   sessions: Session[];
+  accounting: AccountingStatus | null;
   devices: Device[];
   users: PortalUser[];
   packages: Package[];
@@ -172,6 +186,7 @@ type TestResult = {
 const emptyData: DataState = {
   stats: { users: 0, activeSessions: 0, todayData: 0, bandwidth: 0 },
   sessions: [],
+  accounting: null,
   devices: [],
   users: [],
   packages: [],
@@ -418,15 +433,15 @@ function AdminApp() {
     setPageError("");
 
     try {
-      const [stats, sessions, devices, users, packages, macAuthorizations] = await Promise.all([
+      const [stats, sessionsResponse, devices, users, packages, macAuthorizations] = await Promise.all([
         apiRequest<Stats>("/admin/api/stats"),
-        apiRequest<Session[]>("/api/sessions"),
+        apiRequest<SessionsResponse>("/api/sessions"),
         apiRequest<Device[]>("/api/devices"),
         apiRequest<PortalUser[]>("/api/users"),
         apiRequest<Package[]>("/api/packages"),
         apiRequest<MacAuthorization[]>("/api/guest/whitelist"),
       ]);
-      setData({ stats, sessions, devices, users, packages, macAuthorizations });
+      setData({ stats, sessions: sessionsResponse.sessions, accounting: sessionsResponse.accounting, devices, users, packages, macAuthorizations });
     } catch (caughtError) {
       if (caughtError instanceof ApiError && caughtError.status === 401) {
         window.location.replace("/admin/login");
@@ -666,7 +681,7 @@ function AdminApp() {
           <div className="flex flex-col gap-6 p-5 sm:p-8">
             {pageError ? <LoadError message={pageError} /> : null}
             {view === "overview" ? <Overview data={data} isLoading={isLoading} sessions={recentSessions} onSelectSessions={() => setView("sessions")} /> : null}
-            {view === "sessions" ? <SessionsView sessions={data.sessions} isLoading={isLoading} onTerminate={(session) => queueAction("Ngắt phiên kết nối?", `Phiên của ${session.username} sẽ bị kết thúc ngay.`, async () => {
+            {view === "sessions" ? <SessionsView sessions={data.sessions} accounting={data.accounting} isLoading={isLoading} onTerminate={(session) => queueAction("Ngắt phiên kết nối?", `Phiên của ${session.username} sẽ bị kết thúc ngay.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/sessions/${session.id}`, { method: "DELETE" });
               await loadData(true);
               toast.add({ title: "Đã ngắt phiên kết nối", type: "success" });
@@ -880,7 +895,7 @@ function SessionTable({ sessions, onTerminate }: { sessions: Session[]; onTermin
   );
 }
 
-function SessionsView({ sessions, isLoading, onTerminate }: { sessions: Session[]; isLoading: boolean; onTerminate: (session: Session) => void }) {
+function SessionsView({ sessions, accounting, isLoading, onTerminate }: { sessions: Session[]; accounting: AccountingStatus | null; isLoading: boolean; onTerminate: (session: Session) => void }) {
   return (
     <Card>
       <CardHeader>
@@ -892,6 +907,19 @@ function SessionsView({ sessions, isLoading, onTerminate }: { sessions: Session[
         </div>
       </CardHeader>
       <CardContent>
+        {accounting?.state === "error" ? (
+          <Alert variant="destructive" className="mb-5">
+            <CircleAlertIcon aria-hidden="true" />
+            <AlertTitle>Không đọc được phiên từ RADIUS</AlertTitle>
+            <AlertDescription>{accounting.error || "Không thể đồng bộ dữ liệu Accounting từ MariaDB."}</AlertDescription>
+          </Alert>
+        ) : accounting?.state === "ok" && accounting.records === 0 ? (
+          <Alert className="mb-5">
+            <CircleAlertIcon aria-hidden="true" />
+            <AlertTitle>RADIUS chưa có Accounting đang hoạt động</AlertTitle>
+            <AlertDescription>Đồng bộ kết nối MariaDB thành công nhưng bảng radacct chưa có bản ghi phù hợp. Kiểm tra router/AP đã bật Accounting Start và Interim Update.</AlertDescription>
+          </Alert>
+        ) : null}
         {isLoading ? <Skeleton className="h-40 w-full" /> : sessions.length ? <SessionTable sessions={sessions} onTerminate={onTerminate} /> : <NoRecords title="Không có phiên hoạt động" description="Không có người dùng nào đang trực tuyến." />}
       </CardContent>
     </Card>

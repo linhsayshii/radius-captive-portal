@@ -2,7 +2,7 @@ const express = require('express');
 const { sessions, db } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
 const { terminateSession, getLiveMetrics } = require('../../services/sessionManager');
-const { syncRadiusAccounting } = require('../../services/radiusAccountingSync');
+const { syncRadiusAccounting, getRadiusAccountingStatus } = require('../../services/radiusAccountingSync');
 const logger = require('../../utils/logger');
 
 const router = express.Router();
@@ -27,7 +27,10 @@ router.get('/', requireApiAuth, async (req, res) => {
       total_bytes_out: live.totalOutputBytes || 0,
     };
   });
-  res.json(activeSessions);
+  res.json({
+    sessions: activeSessions,
+    accounting: getRadiusAccountingStatus(),
+  });
 });
 
 router.get('/history', requireApiAuth, (req, res) => {

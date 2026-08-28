@@ -9,7 +9,11 @@ function getPool() {
     throw new Error('RADIUS_DATABASE_URL is not configured');
   }
   if (!pool) {
-    pool = mysql.createPool({ uri: radiusDatabaseUrl, connectionLimit: 5, enableKeepAlive: true });
+    // mysql2 accepts a connection URI as the createPool argument. Passing it
+    // under an arbitrary `uri` property does not configure the host/user/db;
+    // inside Docker that makes the portal try its own container instead of
+    // radius-db, so Accounting rows are never read.
+    pool = mysql.createPool(radiusDatabaseUrl);
   }
   return pool;
 }
