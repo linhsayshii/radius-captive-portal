@@ -6,6 +6,7 @@ COPY sites-available/portal /etc/freeradius/3.0/sites-available/portal
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh && ln -s ../mods-available/sql /etc/freeradius/3.0/mods-enabled/sql \
     && ln -s ../sites-available/portal /etc/freeradius/3.0/sites-enabled/portal \
-    && rm -f /etc/freeradius/3.0/sites-enabled/default /etc/freeradius/3.0/sites-enabled/inner-tunnel
+    && rm -f /etc/freeradius/3.0/sites-enabled/default /etc/freeradius/3.0/sites-enabled/inner-tunnel \
+    && rm -f /etc/freeradius/3.0/mods-enabled/eap
 EXPOSE 1812/udp 1813/udp
 ENTRYPOINT ["/entrypoint.sh"]
