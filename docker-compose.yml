@@ -1,7 +1,8 @@
 services:
   portal:
     build: .
-    command: npm start
+    # Safe on every restart: schema/default settings use CREATE/INSERT OR IGNORE.
+    command: sh -c "npm run init-db && exec npm start"
     environment:
       NODE_ENV: production
       PORT: 3000

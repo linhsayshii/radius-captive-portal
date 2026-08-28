@@ -5,6 +5,8 @@ const { loadConfig } = require('../config');
 
 const config = loadConfig();
 const dbPath = config.databasePath || './data/wifi-portal.db';
+const schemaPath = path.join(__dirname, 'schema.sql');
+const schema = fs.readFileSync(schemaPath, 'utf8');
 
 // Ensure data directory exists
 const dbDir = path.dirname(dbPath);
@@ -15,6 +17,12 @@ if (!fs.existsSync(dbDir)) {
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// A fresh Docker volume has no SQLite tables yet. Apply the idempotent schema
+// before preparing any query so the portal can start safely on first deploy.
+// Existing data is preserved because every schema statement uses IF NOT EXISTS.
+db.exec(schema);
+
 // Lightweight forward migrations
 db.exec(`
   CREATE TABLE IF NOT EXISTS mac_authorizations (

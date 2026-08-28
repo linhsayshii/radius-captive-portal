@@ -7,12 +7,6 @@ const testDatabasePath = path.join(os.tmpdir(), `wifi-portal-core-${process.pid}
 process.env.DATABASE_PATH = testDatabasePath;
 process.env.RADIUS_SHARED_SECRET = 'core-workflow-test-secret';
 
-const Database = require('better-sqlite3');
-const schema = fs.readFileSync(path.join(__dirname, '..', 'src', 'db', 'schema.sql'), 'utf8');
-const setupDatabase = new Database(testDatabasePath);
-setupDatabase.exec(schema);
-setupDatabase.close();
-
 const { db, macAuthorizations } = require('../src/db');
 const {
   normalizeMac,
@@ -58,6 +52,13 @@ function testMacAuthorization() {
   assert.strictEqual(getAuthorizedMac(canonicalMac), null);
 }
 
+function testFreshDatabaseStartup() {
+  const usersTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+  const sessionsTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").get();
+  assert(usersTable, 'Fresh portal database must initialize the users table before queries are prepared');
+  assert(sessionsTable, 'Fresh portal database must initialize the sessions table before queries are prepared');
+}
+
 function testDynamicAuthorizationPackets() {
   const disconnect = buildRfc5176Packet(DISCONNECT_REQUEST, 17, {
     'Acct-Session-Id': 'session-test-1',
@@ -79,6 +80,7 @@ function testDynamicAuthorizationPackets() {
 }
 
 try {
+  testFreshDatabaseStartup();
   testMacAuthorization();
   testDynamicAuthorizationPackets();
   console.log('Core portal/RADIUS workflow checks passed.');

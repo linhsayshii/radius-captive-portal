@@ -216,17 +216,24 @@ FreeRADIUS trả `Session-Timeout`, `Idle-Timeout`, `Acct-Interim-Interval` và
 `RADIUS_INTERIM_INTERVAL_SECONDS=10`; đây là chu kỳ dashboard nhận số liệu
 gần real-time.
 
-## 9. Loại Guest khỏi PCC/multi-WAN mangle
+## 9. PCC/multi-WAN: chỉ xử lý khi HotSpot gặp lỗi
 
-Nếu router dùng PCC và Guest nằm trong interface list bị routing mark, thêm một
-rule ở đầu mangle chain để HotSpot dùng default route:
+Không cần thêm rule PCC bypass nếu HotSpot, captive portal và Internet Guest
+đang hoạt động ổn định. Trong cấu hình mẫu, traffic đích local như trang login
+không bị các PCC rule có `dst-address-type=!local` đánh dấu, nên HotSpot vẫn có
+thể hoạt động bình thường.
+
+Chỉ khi Guest gặp redirect ngẫu nhiên, không vào được portal, hoặc session
+HotSpot lỗi sau khi áp PCC, thêm rule ở đầu mangle chain để Guest dùng default
+route:
 
 ```routeros
 /ip firewall mangle
 add chain=prerouting in-interface=guest_captive action=accept comment="Do not apply PCC to HotSpot guests" place-before=0
 ```
 
-Chỉ thêm rule này một lần.
+Chỉ thêm rule này một lần và chỉ sau khi đã xác định PCC là nguyên nhân. Nó làm
+toàn bộ traffic Guest không còn được chia tải qua PCC.
 
 ## 10. Checklist kiểm thử
 
