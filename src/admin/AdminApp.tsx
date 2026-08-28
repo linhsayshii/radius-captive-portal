@@ -1022,13 +1022,13 @@ function AccountsView({
 
                 <Field>
                   <FieldLabel>Chính sách truy cập</FieldLabel>
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {([
                       ["unlimited", "Không giới hạn"],
                       ["custom", "Tốc độ riêng"],
                       ["package", "Gói cước"],
                     ] as Array<[AccountAccessMode, string]>).map(([mode, label]) => (
-                      <label key={mode} className="flex cursor-pointer items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                      <label key={mode} className={`flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-input px-3 py-2 text-sm whitespace-nowrap has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${mode === "package" ? "sm:col-span-2 lg:col-span-1" : ""}`}>
                         <input type="radio" name="access_mode" value={mode} checked={createAccessMode === mode} onChange={() => setCreateAccessMode(mode)} />
                         {label}
                       </label>
@@ -1054,7 +1054,7 @@ function AccountsView({
                   ) : null}
                   {createAccessMode === "custom" ? (
                     <>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-3">
                         <Field>
                           <FieldLabel htmlFor="new-user-down">Tải xuống (Kbps)</FieldLabel>
                           <Input id="new-user-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue="5000" required />
@@ -1063,7 +1063,7 @@ function AccountsView({
                           <FieldLabel htmlFor="new-user-up">Tải lên (Kbps)</FieldLabel>
                           <Input id="new-user-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue="2000" required />
                         </Field>
-                        <Field>
+                        <Field className="col-span-2 lg:col-span-1">
                           <FieldLabel htmlFor="new-user-duration">Thời lượng (phút)</FieldLabel>
                           <Input id="new-user-duration" name="duration_minutes" type="number" min="1" placeholder="Không giới hạn" />
                         </Field>
@@ -1156,13 +1156,13 @@ function AccountsView({
 
                 <Field>
                   <FieldLabel>Chính sách truy cập</FieldLabel>
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {([
                       ["unlimited", "Không giới hạn"],
                       ["custom", "Tốc độ riêng"],
                       ["package", "Gói cước"],
                     ] as Array<[AccountAccessMode, string]>).map(([mode, label]) => (
-                      <label key={mode} className="flex cursor-pointer items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                      <label key={mode} className={`flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-input px-3 py-2 text-sm whitespace-nowrap has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${mode === "package" ? "sm:col-span-2 lg:col-span-1" : ""}`}>
                         <input type="radio" name="access_mode" value={mode} checked={editAccessMode === mode} onChange={() => setEditAccessMode(mode)} />
                         {label}
                       </label>
@@ -1189,7 +1189,7 @@ function AccountsView({
                   ) : null}
                   {editAccessMode === "custom" ? (
                     <>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-3">
                         <Field>
                           <FieldLabel htmlFor="edit-user-down">Tải xuống (Kbps)</FieldLabel>
                           <Input id="edit-user-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue={editingUser.bandwidth_down_kbps || 5000} required />
@@ -1198,7 +1198,7 @@ function AccountsView({
                           <FieldLabel htmlFor="edit-user-up">Tải lên (Kbps)</FieldLabel>
                           <Input id="edit-user-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue={editingUser.bandwidth_up_kbps || 2000} required />
                         </Field>
-                        <Field>
+                        <Field className="col-span-2 lg:col-span-1">
                           <FieldLabel htmlFor="edit-user-duration">Thời lượng (phút)</FieldLabel>
                           <Input id="edit-user-duration" name="duration_minutes" type="number" min="1" defaultValue={editingUser.duration_minutes || ""} placeholder="Không giới hạn" />
                         </Field>
