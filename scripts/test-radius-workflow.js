@@ -74,7 +74,7 @@ async function runTests() {
     package_id: null,
     mac_address: normalizedTestMac,
     ip_address: '192.168.88.250',
-    nas_identifier: '192.168.88.1',
+    nas_identifier: '0.0.0.0',
     username: testMac,
     session_id: testSessionId,
     quota_total_mb: null,
@@ -97,7 +97,7 @@ async function runTests() {
 
   // Test 6: Terminate session
   console.log('Test 6: Central session termination');
-  await terminateSession(createdSession, 'admin_test_kick');
+  await terminateSession(createdSession, 'admin_test_kick', { allowLocalTermination: true });
   const terminatedSession = sessions.getBySessionId.get(testSessionId);
   assert.strictEqual(terminatedSession.is_active, 0);
   assert.strictEqual(terminatedSession.terminated_by, 'admin_test_kick');
@@ -117,6 +117,7 @@ async function runTests() {
     password_hash: null,
     display_name: 'Test User',
     max_devices: 3,
+    package_id: null,
   });
   const testUserId = userResult.lastInsertRowid;
 
@@ -155,7 +156,7 @@ async function runTests() {
     package_id: null,
     mac_address: normalizedExpiredMac,
     ip_address: '192.168.88.101',
-    nas_identifier: '192.168.88.1',
+    nas_identifier: '0.0.0.0',
     username: expiredMac,
     session_id: expiredSessionId,
     quota_total_mb: null,
@@ -163,7 +164,7 @@ async function runTests() {
     bandwidth_up_kbps: 2000,
   });
 
-  checkIdleSessions();
+  await checkIdleSessions();
 
   const checkedSession = sessions.getBySessionId.get(expiredSessionId);
   assert.strictEqual(checkedSession.is_active, 0);
@@ -174,6 +175,7 @@ async function runTests() {
   db.prepare('DELETE FROM sessions WHERE session_id = ?').run(expiredSessionId);
   db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedExpiredMac);
   db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedOauthMac);
+  db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedTestMac);
   db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
 
   console.log('--- ALL TESTS PASSED SUCCESSFULLY! ---');
@@ -183,6 +185,3 @@ runTests().catch(err => {
   console.error('❌ Test failed:', err);
   process.exit(1);
 });
-
-
-

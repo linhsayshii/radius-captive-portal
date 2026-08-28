@@ -120,6 +120,14 @@ const deviceQueries = {
     UPDATE devices SET is_online = @is_online, last_seen = CURRENT_TIMESTAMP,
     session_id = @session_id WHERE mac_address = @mac_address
   `),
+  updateConnection: db.prepare(`
+    UPDATE devices SET
+      user_id = CASE WHEN @user_id IS NULL THEN user_id ELSE @user_id END,
+      is_online = @is_online,
+      last_seen = CURRENT_TIMESTAMP,
+      session_id = @session_id
+    WHERE mac_address = @mac_address
+  `),
   setOffline: db.prepare(`
     UPDATE devices SET is_online = 0 WHERE mac_address = ?
   `),
@@ -178,7 +186,7 @@ const macAuthorizationQueries = {
   get: db.prepare('SELECT * FROM mac_authorizations WHERE mac_address = ?'),
   getAll: db.prepare('SELECT * FROM mac_authorizations ORDER BY expires_at DESC'),
   delete: db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?'),
-  deleteExpired: db.prepare("DELETE FROM mac_authorizations WHERE expires_at <= datetime('now')"),
+  deleteExpired: db.prepare("DELETE FROM mac_authorizations WHERE julianday(expires_at) <= julianday('now')"),
 };
 
 // Export everything

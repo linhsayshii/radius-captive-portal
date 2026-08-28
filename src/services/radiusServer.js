@@ -1,8 +1,9 @@
 const dgram = require('dgram');
 const crypto = require('crypto');
 const { loadConfig } = require('../config');
-const { sessions, devices, users, packages, logs, settings, macAuthorizations } = require('../db');
+const { sessions, devices, users, logs } = require('../db');
 const { startIdleChecker, stopIdleChecker, updateSessionActivity, handleNewConnection } = require('./sessionManager');
+const { getAccessPolicy } = require('./accessPolicy');
 const logger = require('../utils/logger');
 
 const config = loadConfig();
@@ -87,15 +88,18 @@ function buildVsaBuffer(vendorId, vendorType, value) {
 }
 
 function parsePacket(buffer) {
-  if (buffer.length < 20) return null;
+  if (!Buffer.isBuffer(buffer) || buffer.length < 20) return null;
 
   const code = buffer.readUInt8(0);
   const id = buffer.readUInt8(1);
   const length = buffer.readUInt16BE(2);
+  if (length < 20 || length !== buffer.length) return null;
+
   const authenticator = buffer.subarray(4, 20);
   const attributes = parseAttributes(buffer.subarray(20, length));
+  if (!attributes) return null;
 
-  return { code, id, length, authenticator, attributes };
+  return { code, id, length, authenticator, attributes, raw: buffer };
 }
 
 function parseAttributes(buffer) {
@@ -103,10 +107,11 @@ function parseAttributes(buffer) {
   let offset = 0;
 
   while (offset < buffer.length) {
+    if (offset + 2 > buffer.length) return null;
     const type = buffer.readUInt8(offset);
     const len = buffer.readUInt8(offset + 1);
 
-    if (len < 2 || offset + len > buffer.length) break;
+    if (len < 2 || offset + len > buffer.length) return null;
 
     const value = buffer.subarray(offset + 2, offset + len);
 
@@ -117,6 +122,29 @@ function parseAttributes(buffer) {
   }
 
   return attrs;
+}
+
+function readUInt32Attribute(attribute) {
+  return attribute && attribute.length === 4 ? attribute.readUInt32BE(0) : null;
+}
+
+function isAllowedNas(address) {
+  const runtimeConfig = loadConfig();
+  if (runtimeConfig.radiusClients.length) {
+    return runtimeConfig.radiusClients.includes(address);
+  }
+  // Development remains easy to exercise locally. Production must make the
+  // trusted NAS boundary explicit.
+  return runtimeConfig.nodeEnv !== 'production';
+}
+
+function verifyAccountingRequest(packet) {
+  const request = Buffer.from(packet.raw);
+  request.fill(0, 4, 20);
+  const expected = crypto.createHash('md5')
+    .update(Buffer.concat([request, getSharedSecret()]))
+    .digest();
+  return crypto.timingSafeEqual(expected, packet.authenticator);
 }
 
 function buildResponse(requestCode, requestId, requestAuth, attributes) {
@@ -183,6 +211,22 @@ function decodeUserPassword(encrypted, requestAuthenticator) {
   return Buffer.concat(plainBlocks).toString('utf8').replace(/\0+$/, '');
 }
 
+function buildAccessAccept(packet, user, secondsRemaining, message) {
+  const policy = getAccessPolicy(user);
+  const sessionTimeout = Math.max(1, Math.min(secondsRemaining, policy.durationSeconds));
+
+  return buildResponse(PACKET_ACCESS_ACCEPT, packet.id, packet.authenticator, {
+    [ATTR_SESSION_TIMEOUT]: [uint32(sessionTimeout)],
+    [ATTR_IDLE_TIMEOUT]: [uint32(300)],
+    [ATTR_REPLY_MESSAGE]: [Buffer.from(message)],
+    [ATTR_VENDOR_SPECIFIC]: [
+      buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${policy.upKbps}k/${policy.downKbps}k`),
+      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(policy.downKbps * 1000)),
+      buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(policy.upKbps * 1000)),
+    ],
+  });
+}
+
 /**
  * Handle RADIUS Access-Request from Router (NAS)
  */
@@ -203,41 +247,26 @@ async function handleAccessRequest(packet, rinfo) {
       const authEntry = getAuthorizedMac(normalizedMac);
 
       if (authEntry) {
+        const user = authEntry.user_id ? users.getById.get(authEntry.user_id) : null;
+        if (authEntry.user_id && (!user || !user.is_active)) {
+          return buildResponse(PACKET_ACCESS_REJECT, packet.id, packet.authenticator, {
+            [ATTR_REPLY_MESSAGE]: [Buffer.from('The associated account is inactive')],
+          });
+        }
+
+        const policy = getAccessPolicy(user);
+        if (!policy.packageValid) {
+          return buildResponse(PACKET_ACCESS_REJECT, packet.id, packet.authenticator, {
+            [ATTR_REPLY_MESSAGE]: [Buffer.from('The assigned package is inactive')],
+          });
+        }
+
         const secondsRemaining = Math.max(
           1,
           Math.floor((new Date(authEntry.expires_at).getTime() - Date.now()) / 1000)
         );
-
-        let downKbps = 5000;
-        let upKbps = 2000;
-
-        if (authEntry.user_id) {
-          const user = users.getById.get(authEntry.user_id);
-          if (user?.package_id) {
-            const userPkg = packages.getById.get(user.package_id);
-            if (userPkg) {
-              downKbps = userPkg.bandwidth_down_kbps || downKbps;
-              upKbps = userPkg.bandwidth_up_kbps || upKbps;
-            }
-          }
-        }
-
-        logger.info(`RADIUS Access-Accept for MAC: ${normalizedMac} (${secondsRemaining}s remaining, ${downKbps}/${upKbps} kbps)`);
-
-        const responseAttrs = {
-          [ATTR_SESSION_TIMEOUT]: [uint32(secondsRemaining)],
-          [ATTR_IDLE_TIMEOUT]: [uint32(300)],
-          [ATTR_REPLY_MESSAGE]: [Buffer.from('Access authorized by central portal')],
-          [ATTR_VENDOR_SPECIFIC]: [
-            // MikroTik VSA rate limit: upload/download
-            buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
-            // WISPr rate limit in bps
-            buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
-            buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
-          ],
-        };
-
-        return buildResponse(PACKET_ACCESS_ACCEPT, packet.id, packet.authenticator, responseAttrs);
+        logger.info(`RADIUS Access-Accept for MAC: ${normalizedMac} (${secondsRemaining}s remaining, ${policy.downKbps}/${policy.upKbps} kbps)`);
+        return buildAccessAccept(packet, user, secondsRemaining, 'Access authorized by central portal');
       }
     } catch (err) {
       logger.error('Error verifying MAC authorization:', err);
@@ -253,33 +282,15 @@ async function handleAccessRequest(packet, rinfo) {
         const valid = await require('bcryptjs').compare(password, user.password_hash);
 
         if (valid) {
-          let downKbps = 5000;
-          let upKbps = 2000;
-          let durationSeconds = 86400;
-
-          if (user.package_id) {
-            const userPkg = packages.getById.get(user.package_id);
-            if (userPkg) {
-              downKbps = userPkg.bandwidth_down_kbps || downKbps;
-              upKbps = userPkg.bandwidth_up_kbps || upKbps;
-              durationSeconds = (userPkg.duration_minutes || 1440) * 60;
-            }
+          const policy = getAccessPolicy(user);
+          if (!policy.packageValid) {
+            return buildResponse(PACKET_ACCESS_REJECT, packet.id, packet.authenticator, {
+              [ATTR_REPLY_MESSAGE]: [Buffer.from('The assigned package is inactive')],
+            });
           }
 
           logger.info(`RADIUS Access-Accept for registered user: ${rawUsername}`);
-
-          const responseAttrs = {
-            [ATTR_SESSION_TIMEOUT]: [uint32(durationSeconds)],
-            [ATTR_IDLE_TIMEOUT]: [uint32(300)],
-            [ATTR_REPLY_MESSAGE]: [Buffer.from('Welcome ' + (user.display_name || rawUsername))],
-            [ATTR_VENDOR_SPECIFIC]: [
-              buildVsaBuffer(VENDOR_MIKROTIK, MIKROTIK_RATE_LIMIT, `${upKbps}k/${downKbps}k`),
-              buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_DOWN, uint32(downKbps * 1000)),
-              buildVsaBuffer(VENDOR_WISPR, WISPR_BANDWIDTH_MAX_UP, uint32(upKbps * 1000)),
-            ],
-          };
-
-          return buildResponse(PACKET_ACCESS_ACCEPT, packet.id, packet.authenticator, responseAttrs);
+          return buildAccessAccept(packet, user, policy.durationSeconds, 'Welcome ' + (user.display_name || rawUsername));
         }
       }
     } catch (err) {
@@ -300,13 +311,13 @@ async function handleAccessRequest(packet, rinfo) {
 async function handleAccountingRequest(packet, rinfo) {
   const attrs = packet.attributes;
   const sessionId = attrs[ATTR_ACCT_SESSION_ID]?.[0]?.toString('utf8') || `sess-${Date.now()}`;
-  const statusType = attrs[ATTR_ACCT_STATUS_TYPE]?.[0]?.readUInt32BE(0);
+  const statusType = readUInt32Attribute(attrs[ATTR_ACCT_STATUS_TYPE]?.[0]);
   const username = attrs[ATTR_USER_NAME]?.[0]?.toString('utf8') || '';
   const rawCallingStationId = attrs[ATTR_CALLING_STATION_ID]?.[0]?.toString('utf8') || '';
   const nasIp = attrs[ATTR_NAS_IP]?.[0] ? ipBufferToString(attrs[ATTR_NAS_IP][0]) : rinfo.address;
   const framedIp = attrs[ATTR_FRAMED_IP]?.[0] ? ipBufferToString(attrs[ATTR_FRAMED_IP][0]) : null;
-  const inputOctets = attrs[ATTR_ACCT_INPUT_OCTETS]?.[0]?.readUInt32BE(0) || 0;
-  const outputOctets = attrs[ATTR_ACCT_OUTPUT_OCTETS]?.[0]?.readUInt32BE(0) || 0;
+  const inputOctets = readUInt32Attribute(attrs[ATTR_ACCT_INPUT_OCTETS]?.[0]) || 0;
+  const outputOctets = readUInt32Attribute(attrs[ATTR_ACCT_OUTPUT_OCTETS]?.[0]) || 0;
 
   const normalizedMac = normalizeMac(rawCallingStationId) || normalizeMac(username) || 'unknown';
 
@@ -314,24 +325,25 @@ async function handleAccountingRequest(packet, rinfo) {
 
   if (statusType === ACCT_STATUS_START) {
     try {
-      const user = users.getByIdentifier.get(username);
+      const usernameUser = users.getByIdentifier.get(username);
       const { getAuthorizedMac } = require('../routes/api/guest');
       const authEntry = getAuthorizedMac(normalizedMac);
+      const user = usernameUser || (authEntry?.user_id ? users.getById.get(authEntry.user_id) : null);
 
-      let userId = user?.id || authEntry?.user_id || null;
-      let packageId = user?.package_id || null;
-      let downKbps = 5000;
-      let upKbps = 2000;
-      let quotaTotalMb = null;
-
-      if (packageId) {
-        const userPkg = packages.getById.get(packageId);
-        if (userPkg) {
-          downKbps = userPkg.bandwidth_down_kbps || downKbps;
-          upKbps = userPkg.bandwidth_up_kbps || upKbps;
-          quotaTotalMb = userPkg.quota_mb || null;
-        }
+      if (authEntry?.user_id && (!user || !user.is_active)) {
+        throw new Error('Accounting request belongs to an inactive account');
       }
+
+      const policy = getAccessPolicy(user);
+      if (!policy.packageValid) {
+        throw new Error('Accounting request belongs to an inactive package');
+      }
+
+      const userId = user?.id || null;
+      const packageId = policy.packageId;
+      const downKbps = policy.downKbps;
+      const upKbps = policy.upKbps;
+      const quotaTotalMb = policy.quotaTotalMb;
 
       // Check if session already exists
       const existingSession = sessions.getBySessionId.get(sessionId);
@@ -356,7 +368,8 @@ async function handleAccountingRequest(packet, rinfo) {
       if (normalizedMac && normalizedMac !== 'unknown') {
         const existingDevice = devices.getByMac.get(normalizedMac);
         if (existingDevice) {
-          devices.updateOnline.run({
+          devices.updateConnection.run({
+            user_id: userId,
             is_online: 1,
             session_id: activeSession?.id || null,
             mac_address: normalizedMac,
@@ -453,11 +466,20 @@ async function handleAccountingRequest(packet, rinfo) {
 
 function createServer(port, name) {
   const socket = dgram.createSocket('udp4');
+  let ready;
 
   socket.on('message', async (msg, rinfo) => {
     try {
       const packet = parsePacket(msg);
       if (!packet) return;
+      if (!isAllowedNas(rinfo.address)) {
+        logger.warn(`RADIUS packet rejected from untrusted NAS ${rinfo.address}`);
+        return;
+      }
+      if (packet.code === PACKET_ACCOUNTING_REQUEST && !verifyAccountingRequest(packet)) {
+        logger.warn(`RADIUS Accounting-Request rejected because its authenticator is invalid (${rinfo.address})`);
+        return;
+      }
 
       let response;
 
@@ -485,22 +507,41 @@ function createServer(port, name) {
     logger.error(`RADIUS server error on port ${port}:`, err);
   });
 
-  socket.bind(port, () => {
-    logger.info(`RADIUS ${name} server listening on port ${port}/UDP`);
+  ready = new Promise((resolve, reject) => {
+    const onBindError = (err) => {
+      socket.off('listening', onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      socket.off('error', onBindError);
+      logger.info(`RADIUS ${name} server listening on port ${port}/UDP`);
+      resolve();
+    };
+
+    socket.once('error', onBindError);
+    socket.once('listening', onListening);
+    socket.bind(port);
   });
 
-  return socket;
+  return { socket, ready };
 }
 
-function start({ authPort = 1812, accountingPort = 1813 } = {}) {
+async function start({ authPort = 1812, accountingPort = 1813 } = {}) {
   if (servers.length) return;
 
-  servers = [createServer(authPort, 'Auth')];
+  const createdServers = [createServer(authPort, 'Auth')];
   if (accountingPort !== authPort) {
-    servers.push(createServer(accountingPort, 'Accounting'));
+    createdServers.push(createServer(accountingPort, 'Accounting'));
   }
 
-  startIdleChecker();
+  servers = createdServers.map(({ socket }) => socket);
+  try {
+    await Promise.all(createdServers.map(({ ready }) => ready));
+    startIdleChecker();
+  } catch (error) {
+    stop();
+    throw error;
+  }
 }
 
 function stop() {
@@ -522,4 +563,3 @@ module.exports = {
   normalizeMac,
   buildVsaBuffer,
 };
-

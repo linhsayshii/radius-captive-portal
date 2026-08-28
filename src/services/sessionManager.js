@@ -1,5 +1,6 @@
 const { sessions, devices, users, packages, macAuthorizations } = require('../db');
 const { disconnectSession } = require('./radiusClient');
+const { getAccessPolicy } = require('./accessPolicy');
 const logger = require('../utils/logger');
 
 const ACTIVITY_THRESHOLD = 1024; // bytes
@@ -7,11 +8,21 @@ const IDLE_CHECK_INTERVAL = 30 * 1000; // 30 seconds
 
 let idleCheckTimer = null;
 
+// SQLite CURRENT_TIMESTAMP is UTC but is returned as "YYYY-MM-DD HH:mm:ss"
+// without a timezone suffix. Node treats that bare format as local time, which
+// made new sessions appear seven hours old in Vietnam and expire immediately.
+function toTimestampMs(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return Date.parse(`${value.replace(' ', 'T')}Z`);
+  }
+  return new Date(value).getTime();
+}
+
 function startIdleChecker() {
   if (idleCheckTimer) return;
 
   idleCheckTimer = setInterval(() => {
-    checkIdleSessions();
+    void checkIdleSessions();
   }, IDLE_CHECK_INTERVAL);
   logger.info('Session idle & expiry checker started');
 }
@@ -24,17 +35,14 @@ function stopIdleChecker() {
   }
 }
 
-function checkIdleSessions() {
+async function checkIdleSessions() {
   try {
-    // Purge expired MAC authorizations from SQLite
-    macAuthorizations.deleteExpired.run();
-
     const activeSessions = sessions.getActive.all();
 
     for (const session of activeSessions) {
       const idleSeconds = session.idle_seconds || 0;
       const durationSeconds = Math.floor(
-        (Date.now() - new Date(session.start_time).getTime()) / 1000
+        (Date.now() - toTimestampMs(session.start_time)) / 1000
       );
 
       // Check package duration if linked
@@ -49,7 +57,7 @@ function checkIdleSessions() {
       // Check if session expired by duration
       if (durationSeconds >= maxDurationSeconds) {
         logger.info(`Session ${session.session_id} expired by duration limit (${durationSeconds}s / ${maxDurationSeconds}s)`);
-        terminateSession(session, 'duration_expired');
+        await terminateSession(session, 'duration_expired', { allowLocalTermination: true });
         continue;
       }
 
@@ -59,7 +67,7 @@ function checkIdleSessions() {
         if (auth && new Date(auth.expires_at).getTime() <= Date.now()) {
           const reason = auth.access_type === 'oauth_grace' ? 'oauth_grace_expired' : 'mac_auth_expired';
           logger.info(`Session ${session.session_id} expired by MAC authorization time (${reason})`);
-          terminateSession(session, reason);
+          await terminateSession(session, reason, { allowLocalTermination: true });
           continue;
         }
       }
@@ -67,7 +75,7 @@ function checkIdleSessions() {
       // Check quota if set
       if (session.quota_total_mb && (session.quota_used_mb || 0) >= session.quota_total_mb) {
         logger.info(`Session ${session.session_id} exceeded quota (${session.quota_used_mb}MB / ${session.quota_total_mb}MB)`);
-        terminateSession(session, 'quota_exceeded');
+        await terminateSession(session, 'quota_exceeded', { allowLocalTermination: true });
         continue;
       }
 
@@ -75,18 +83,51 @@ function checkIdleSessions() {
       const idleTimeout = 300;
       if (idleSeconds >= idleTimeout) {
         logger.info(`Session ${session.session_id} idle timed out (${idleSeconds}s)`);
-        terminateSession(session, 'idle_timeout');
+        await terminateSession(session, 'idle_timeout', { allowLocalTermination: true });
       }
     }
+
+    // Remove stale authorizations only after active sessions have had a chance
+    // to observe the expiry and issue a Disconnect-Request to their NAS.
+    macAuthorizations.deleteExpired.run();
   } catch (err) {
     logger.error('Error during checkIdleSessions:', err);
   }
 }
 
-async function terminateSession(session, reason) {
-  if (!session) return;
+async function terminateSession(session, reason, { allowLocalTermination = false } = {}) {
+  if (!session) return { success: false, error: 'Không tìm thấy phiên kết nối' };
 
   logger.info(`Terminating session ${session.session_id} (Reason: ${reason})`);
+
+  // Send RADIUS Disconnect-Request to NAS
+  const nasIp = session.nas_identifier || session.ip_address;
+  let disconnect = { attempted: false, success: false };
+  if (nasIp && nasIp !== '0.0.0.0' && nasIp !== 'unknown') {
+    disconnect.attempted = true;
+    try {
+      const result = await disconnectSession({
+        sessionId: session.session_id,
+        nasIp,
+        username: session.username,
+        macAddress: session.mac_address,
+        ipAddress: session.ip_address,
+      });
+
+      disconnect = { attempted: true, ...result };
+      if (!result.success) {
+        logger.warn(`Disconnect-Request to router ${nasIp} for session ${session.session_id} returned: ${result.error}`);
+        return { success: false, error: result.error || 'Router không xác nhận lệnh ngắt kết nối', disconnect };
+      } else {
+        logger.info(`Successfully sent Disconnect-Request to router ${nasIp} for session ${session.session_id}`);
+      }
+    } catch (err) {
+      logger.error(`Failed to send Disconnect-Request to router ${nasIp}:`, err);
+      return { success: false, error: err.message, disconnect };
+    }
+  } else if (!allowLocalTermination) {
+    return { success: false, error: 'Không có địa chỉ NAS hợp lệ để ngắt thiết bị', disconnect };
+  }
 
   sessions.update.run({
     ...session,
@@ -100,28 +141,7 @@ async function terminateSession(session, reason) {
   }
 
   removeLiveMetric(session.session_id);
-
-  // Send RADIUS Disconnect-Request to NAS
-  const nasIp = session.nas_identifier || session.ip_address;
-  if (nasIp && nasIp !== '0.0.0.0') {
-    try {
-      const result = await disconnectSession({
-        sessionId: session.session_id,
-        nasIp,
-        username: session.username,
-        macAddress: session.mac_address,
-        ipAddress: session.ip_address,
-      });
-
-      if (!result.success) {
-        logger.warn(`Disconnect-Request to router ${nasIp} for session ${session.session_id} returned: ${result.error}`);
-      } else {
-        logger.info(`Successfully sent Disconnect-Request to router ${nasIp} for session ${session.session_id}`);
-      }
-    } catch (err) {
-      logger.error(`Failed to send Disconnect-Request to router ${nasIp}:`, err);
-    }
-  }
+  return { success: true, disconnect, localOnly: !disconnect.attempted };
 }
 
 async function handleNewConnection(userId, macAddress, nasIp) {
@@ -129,13 +149,17 @@ async function handleNewConnection(userId, macAddress, nasIp) {
   if (!user) return;
 
   // Check device limit for user
-  const maxDevices = user.max_devices || 3;
+  const policy = getAccessPolicy(user);
+  const maxDevices = policy.maxDevices;
   const onlineDevices = devices.getOnlineByUser.all(userId);
 
-  if (onlineDevices.length >= maxDevices) {
+  // The device that just connected is already online, so enforce only when it
+  // pushes the count beyond the limit. Using >= disconnected a user's first
+  // device whenever max_devices was 1.
+  if (onlineDevices.length > maxDevices) {
     // Find oldest active device
     const oldest = onlineDevices.reduce((a, b) =>
-      new Date(a.first_seen).getTime() < new Date(b.first_seen).getTime() ? a : b
+      toTimestampMs(a.first_seen) < toTimestampMs(b.first_seen) ? a : b
     );
 
     if (oldest.session_id) {
@@ -161,11 +185,13 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
 
   let rateDownKbps = 0;
   let rateUpKbps = 0;
+  let bytesChanged = false;
 
   if (metric) {
     const elapsedSec = Math.max(1, (now - metric.lastTimestamp) / 1000);
     const inDelta = Math.max(0, inputOctets - metric.lastInputOctets);
     const outDelta = Math.max(0, outputOctets - metric.lastOutputOctets);
+    bytesChanged = inDelta + outDelta >= ACTIVITY_THRESHOLD;
 
     rateDownKbps = Math.round((inDelta * 8) / (elapsedSec * 1024));
     rateUpKbps = Math.round((outDelta * 8) / (elapsedSec * 1024));
@@ -190,7 +216,7 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
     liveMetrics.set(sessionId, metric);
   }
 
-  const isTransmitting = rateDownKbps > 0 || rateUpKbps > 0 || (currentTotalBytes > (session.last_bytes || 0) + ACTIVITY_THRESHOLD);
+  const isTransmitting = rateDownKbps > 0 || rateUpKbps > 0 || bytesChanged;
 
   if (isTransmitting) {
     // User is active - reset idle counter
@@ -265,5 +291,5 @@ module.exports = {
   getLiveMetrics,
   getTotalLiveBandwidth,
   removeLiveMetric,
+  toTimestampMs,
 };
-

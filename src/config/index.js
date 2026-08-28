@@ -4,6 +4,13 @@ const path = require('path');
 // Load .env file
 dotenv.config();
 
+function parseCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function loadConfig() {
   return {
     port: parseInt(process.env.PORT || '3000', 10),
@@ -20,6 +27,7 @@ function loadConfig() {
     radiusAuthPort: parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10),
     radiusAccountingPort: parseInt(process.env.RADIUS_ACCOUNTING_PORT || '1813', 10),
     radiusCoaPort: parseInt(process.env.RADIUS_COA_PORT || '3799', 10),
+    radiusClients: parseCsv(process.env.RADIUS_CLIENTS),
     // WebDAV
     webdavUrl: process.env.WEBDAV_URL || '',
     webdavUsername: process.env.WEBDAV_USERNAME || '',

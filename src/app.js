@@ -1,10 +1,10 @@
 const express = require('express');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
 const helmet = require('helmet');
 const path = require('path');
 const { loadConfig } = require('./config');
 const { passport } = require('./routes/oauth');
+const SQLiteSessionStore = require('./services/sqliteSessionStore');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -25,18 +25,6 @@ app.use(helmet({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Session store
-let sessionStore;
-try {
-  const SQLiteStore = require('connect-sqlite3')(session);
-  sessionStore = new SQLiteStore({
-    db: 'sessions.db',
-    dir: path.dirname(config.databasePath),
-  });
-} catch (err) {
-  logger.warn('SQLiteStore not initialized, falling back to default session store: ' + err.message);
-}
-
 // Session configuration
 const sessionConfig = {
   secret: config.sessionSecret,
@@ -46,13 +34,11 @@ const sessionConfig = {
   cookie: {
     httpOnly: true,
     secure: config.nodeEnv === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   },
+  store: new SQLiteSessionStore(),
 };
-if (sessionStore) {
-  sessionConfig.store = sessionStore;
-}
 
 app.use(session(sessionConfig));
 
@@ -86,6 +72,7 @@ app.use('/auth', require('./routes/oauth').router);
 app.use('/admin', require('./routes/auth')); // Admin auth routes
 app.use('/admin/api', require('./routes/admin'));
 app.use('/admin/api', require('./routes/admin/stats'));
+app.use('/admin/api', require('./routes/admin/backup'));
 app.use('/admin/api/settings', require('./routes/api/settings'));
 app.use('/api/packages', require('./routes/api/packages'));
 app.use('/api/guest', require('./routes/api/guest'));

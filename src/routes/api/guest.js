@@ -143,20 +143,23 @@ router.delete('/whitelist/:mac', requireApiAuth, async (req, res) => {
   if (!mac || !macAuthorizations.get.get(mac)) {
     return res.status(404).json({ error: 'Không tìm thấy quyền MAC' });
   }
-  macWhitelist.delete(mac);
-  macAuthorizations.delete.run(mac);
 
   // Terminate any active session and send RADIUS Disconnect-Request to router immediately
-  try {
-    const { sessions } = require('../../db');
-    const { terminateSession } = require('../../services/sessionManager');
-    const activeSession = sessions.getActiveByMac.get(mac, mac);
-    if (activeSession) {
-      await terminateSession(activeSession, 'admin_revoked_mac');
+  const { sessions } = require('../../db');
+  const { terminateSession } = require('../../services/sessionManager');
+  const activeSession = sessions.getActiveByMac.get(mac, mac);
+  if (activeSession) {
+    const result = await terminateSession(activeSession, 'admin_revoked_mac');
+    if (!result.success) {
+      return res.status(502).json({
+        error: result.error || 'Router chưa xác nhận lệnh ngắt thiết bị',
+        disconnect: result.disconnect,
+      });
     }
-  } catch (err) {
-    logger.error('Error disconnecting revoked MAC session:', err);
   }
+
+  macWhitelist.delete(mac);
+  macAuthorizations.delete.run(mac);
 
   logger.info('MAC authorisation revoked by admin', { macAddress: mac, adminId: req.session.adminId });
   res.json({ success: true });

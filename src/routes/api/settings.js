@@ -1,8 +1,11 @@
 const express = require('express');
 const os = require('os');
 const { loadConfig } = require('../../config');
+const { requireApiAuth } = require('../../middleware/auth');
 
 const router = express.Router();
+
+router.use(requireApiAuth);
 
 function getPrimaryLanIp() {
   const interfaces = os.networkInterfaces();

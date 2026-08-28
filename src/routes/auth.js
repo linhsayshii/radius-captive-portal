@@ -5,6 +5,7 @@ const { users, admins } = require('../db');
 const { requireApiAuth } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const { authorizeMac, normalizeMac } = require('./api/guest');
+const { getAccessPolicy, getAuthorizationDurationMs } = require('../services/accessPolicy');
 
 // Admin login page
 router.get('/login', (req, res) => {
@@ -94,6 +95,10 @@ router.post('/local', async (req, res) => {
       return res.status(401).json({ error: 'Account is disabled' });
     }
 
+    if (!getAccessPolicy(user).packageValid) {
+      return res.status(403).json({ error: 'Assigned package is inactive' });
+    }
+
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -111,7 +116,7 @@ router.post('/local', async (req, res) => {
         user_id: user.id,
         username: user.identifier,
         access_type: 'account',
-      });
+      }, getAuthorizationDurationMs(user));
     }
 
     res.json({

@@ -33,8 +33,15 @@ router.delete('/:id', requireApiAuth, async (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  await terminateSession(session, 'admin');
-  res.json({ success: true });
+  const result = await terminateSession(session, 'admin');
+  if (!result.success) {
+    return res.status(502).json({
+      error: result.error || 'Router chưa xác nhận lệnh ngắt kết nối',
+      disconnect: result.disconnect,
+    });
+  }
+
+  res.json({ success: true, disconnect: result.disconnect });
 });
 
 module.exports = router;

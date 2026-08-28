@@ -193,9 +193,19 @@ async function sendDynAuthPacket(nasIp, code, attributes, timeoutMs = 4000) {
       resolve({ success: false, error: 'Hết thời gian chờ phản hồi từ Router (UDP ' + coaPort + ')' });
     }, timeoutMs);
 
-    client.on('message', (msg) => {
+    client.on('message', (msg, rinfo) => {
       if (finished) return;
       if (msg.length < 20) return;
+
+      if (rinfo.address !== nasIp) {
+        logger.warn(`Ignoring RADIUS DynAuth response from unexpected host ${rinfo.address}`);
+        return;
+      }
+
+      if (msg.readUInt16BE(2) !== msg.length) {
+        logger.warn(`RADIUS DynAuth response length mismatch from ${nasIp}`);
+        return;
+      }
 
       const respCode = msg.readUInt8(0);
       const respId = msg.readUInt8(1);
@@ -223,6 +233,7 @@ async function sendDynAuthPacket(nasIp, code, attributes, timeoutMs = 4000) {
 
       if (!authValid) {
         logger.warn(`RADIUS DynAuth response authenticator mismatch from ${nasIp}`);
+        return resolve({ success: false, error: 'Router trả về RADIUS response authenticator không hợp lệ' });
       }
 
       if (respCode === DISCONNECT_ACK || respCode === COA_ACK) {
@@ -337,4 +348,3 @@ module.exports = {
   COA_ACK,
   COA_NACK,
 };
-

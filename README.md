@@ -91,6 +91,21 @@ GOOGLE_CLIENT_SECRET=your-client-secret
 GOOGLE_CALLBACK_URL=https://wifi.yourdomain.com/auth/google/callback
 ```
 
+### 🌐 Danh sách tên miền cần Walled Garden (Whitelist trên Router)
+
+Khi người dùng chưa đăng nhập, Router cần mở thông các tên miền sau để giao diện Google Sign-in hoạt động bình thường:
+
+| Tên miền | Mục đích |
+| :--- | :--- |
+| `wifi.yourdomain.com` (hoặc IP Server) | Giao diện Captive Portal & Callback URL |
+| `accounts.google.com` | Trang đăng nhập tài khoản Google |
+| `accounts.youtube.com` | Phiên SSO / Identity của Google |
+| `ssl.gstatic.com`, `fonts.gstatic.com` | Static CDN tài nguyên & Font giao diện |
+| `fonts.googleapis.com` | Google Fonts |
+| `apis.google.com`, `play.google.com` | Thư viện OAuth Client SDK |
+| `*.google.com`, `*.gstatic.com`, `*.googleapis.com` | Wildcard toàn bộ dịch vụ phụ trợ Google OAuth |
+
+
 ---
 
 ## ⚡ Các cổng mạng (Ports) sử dụng

@@ -6,6 +6,7 @@ const { users, oauth, logs } = require('../db');
 const { loadConfig } = require('../config');
 const { authorizeMac, normalizeMac } = require('./api/guest');
 const logger = require('../utils/logger');
+const { getAccessPolicy, getAuthorizationDurationMs } = require('../services/accessPolicy');
 
 const router = express.Router();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -104,7 +105,10 @@ function configurePassport() {
       const whitelistEntry = oauth.getByEmail.get(email);
       if (!whitelistEntry) return done(null, false, { message: 'Email not whitelisted' });
 
-      let user = users.getByEmail.get(email);
+      let user = whitelistEntry.user_id ? users.getById.get(whitelistEntry.user_id) : users.getByEmail.get(email);
+      if (user && !user.is_active) {
+        return done(null, false, { message: 'Account is disabled' });
+      }
       if (!user) {
         const result = users.create.run({
           type: 'oauth',
@@ -117,7 +121,12 @@ function configurePassport() {
         user = { id: result.lastInsertRowid };
       }
 
-      return done(null, { id: user.id, email, type: 'oauth' });
+      const fullUser = users.getById.get(user.id);
+      if (!getAccessPolicy(fullUser).packageValid) {
+        return done(null, false, { message: 'Assigned package is inactive' });
+      }
+
+      return done(null, { id: fullUser.id, email, type: fullUser.type });
     } catch (error) {
       return done(error);
     }
@@ -177,7 +186,7 @@ router.get('/google/callback', (req, res, next) => {
         user_agent: req.headers['user-agent'],
         user_id: req.user.id,
         username: req.user.email,
-      });
+      }, getAuthorizationDurationMs(users.getById.get(req.user.id)));
 
       // Log successful connection
       try {
@@ -212,5 +221,4 @@ router.get('/google/callback', (req, res, next) => {
 });
 
 module.exports = { router, passport };
-
 

@@ -10,18 +10,30 @@ async function createBackup() {
   const backupDir = path.dirname(config.databasePath);
   const backupFile = path.join(backupDir, `backup-${timestamp}.db`);
 
-  // Copy database
-  fs.copyFileSync(config.databasePath, backupFile);
+  try {
+    // SQLite WAL databases cannot be safely backed up with a plain file copy.
+    // better-sqlite3's backup API creates a consistent snapshot.
+    await db.backup(backupFile);
 
-  // Upload to WebDAV if configured
-  if (config.webdavUrl) {
-    await uploadToWebDAV(backupFile, `wifi-portal-${timestamp}.db`);
+    if (config.webdavUrl) {
+      await uploadToWebDAV(backupFile, `wifi-portal-${timestamp}.db`);
+    }
+
+    const sizeBytes = fs.statSync(backupFile).size;
+    db.prepare(`
+      INSERT INTO backups (filename, size_bytes, status)
+      VALUES (?, ?, ?)
+    `).run(path.basename(backupFile), sizeBytes, config.webdavUrl ? 'uploaded' : 'local');
+
+    await cleanOldBackups(config.backupRetention || 10);
+    return { success: true, file: backupFile, sizeBytes };
+  } catch (error) {
+    db.prepare(`
+      INSERT INTO backups (filename, status)
+      VALUES (?, ?)
+    `).run(path.basename(backupFile), 'failed');
+    throw error;
   }
-
-  // Clean old backups
-  await cleanOldBackups(config.backupRetention || 10);
-
-  return { success: true, file: backupFile };
 }
 
 async function uploadToWebDAV(filePath, fileName) {

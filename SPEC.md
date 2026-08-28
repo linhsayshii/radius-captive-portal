@@ -319,7 +319,22 @@ CREATE INDEX idx_oauth_email ON oauth_whitelist(google_email);
 7. Create session → Redirect to success page
 ```
 
+#### Walled Garden Domain Requirements (Pre-Authentication)
+
+For Google OAuth to function before authentication, routers/APs must whitelist:
+
+| Domain | Role |
+| :--- | :--- |
+| `portal.yourcompany.com` | Captive Portal web UI & OAuth Callback |
+| `accounts.google.com` | Google Sign-in & consent screen |
+| `accounts.youtube.com` | Google account SSO / multi-login state |
+| `ssl.gstatic.com`, `fonts.gstatic.com` | Google static CDN assets, icons, fonts |
+| `fonts.googleapis.com` | Google UI typography |
+| `apis.google.com`, `play.google.com` | Google OAuth scripts & client services |
+| `*.google.com`, `*.gstatic.com`, `*.googleapis.com` | Recommended wildcard whitelist |
+
 ### 4.3 OAuth Whitelist Management
+
 
 - Only admins can add/remove emails from whitelist
 - Whitelist is per-user (each whitelist entry links to a user account)

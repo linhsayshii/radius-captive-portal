@@ -1,15 +1,65 @@
 const app = require('./app');
 const { loadConfig } = require('./config');
 const logger = require('./utils/logger');
-const { start: startRadius } = require('./services/radiusServer');
+const { start: startRadius, stop: stopRadius } = require('./services/radiusServer');
 
 const config = loadConfig();
 
-app.listen(config.port, () => {
-  logger.info(`WiFi Portal server started on port ${config.port}`);
-  logger.info(`Environment: ${config.nodeEnv}`);
-  logger.info(`Database: ${config.databasePath}`);
-});
+function validateRuntimeConfig() {
+  const errors = [];
+  const ports = [config.port, config.radiusAuthPort, config.radiusAccountingPort, config.radiusCoaPort];
+  if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    errors.push('One or more configured ports are invalid');
+  }
 
-// Authentication requests arrive on 1812 by default. 3799 is reserved for CoA.
-startRadius({ authPort: config.radiusAuthPort, accountingPort: config.radiusAccountingPort });
+  if (config.nodeEnv === 'production') {
+    if (!config.radiusSharedSecret || config.radiusSharedSecret === 'changeme') {
+      errors.push('RADIUS_SHARED_SECRET must be configured in production');
+    }
+    if (!config.sessionSecret || config.sessionSecret === 'dev-secret-change-in-production') {
+      errors.push('ADMIN_SESSION_SECRET must be configured in production');
+    }
+    if (!config.radiusClients.length) {
+      errors.push('RADIUS_CLIENTS must contain the trusted NAS/router source IPs in production');
+    }
+  }
+
+  return errors;
+}
+
+function startHttpServer() {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(config.port, () => {
+      server.off('error', onError);
+      logger.info(`WiFi Portal server started on port ${config.port}`);
+      logger.info(`Environment: ${config.nodeEnv}`);
+      logger.info(`Database: ${config.databasePath}`);
+      resolve(server);
+    });
+    const onError = (error) => reject(error);
+    server.once('error', onError);
+  });
+}
+
+async function bootstrap() {
+  const configurationErrors = validateRuntimeConfig();
+  if (configurationErrors.length) {
+    throw new Error(`Invalid runtime configuration: ${configurationErrors.join('; ')}`);
+  }
+
+  await startRadius({ authPort: config.radiusAuthPort, accountingPort: config.radiusAccountingPort });
+  const httpServer = await startHttpServer();
+
+  const shutdown = (signal) => {
+    logger.info(`Received ${signal}; shutting down WiFi Portal`);
+    stopRadius();
+    httpServer.close(() => process.exit(0));
+  };
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+bootstrap().catch((error) => {
+  logger.error('WiFi Portal failed to start:', error);
+  process.exitCode = 1;
+});

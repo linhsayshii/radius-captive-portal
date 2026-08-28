@@ -30,7 +30,13 @@ router.delete('/:mac', requireApiAuth, async (req, res) => {
     (device.session_id ? sessions.getById.get(device.session_id) : null);
 
   if (activeSession && activeSession.is_active) {
-    await terminateSession(activeSession, 'admin_device_kick');
+    const result = await terminateSession(activeSession, 'admin_device_kick');
+    if (!result.success) {
+      return res.status(502).json({
+        error: result.error || 'Router chưa xác nhận lệnh ngắt thiết bị',
+        disconnect: result.disconnect,
+      });
+    }
   }
 
   devices.setOffline.run(normalizedMac);
