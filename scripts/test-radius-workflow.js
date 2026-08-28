@@ -171,12 +171,84 @@ async function runTests() {
   assert.strictEqual(checkedSession.terminated_by, 'mac_auth_expired');
   console.log('✅ Expired MAC session successfully terminated with mac_auth_expired');
 
+  // Test 10: Live UDP Access-Request verification
+  console.log('Test 10: Live UDP Access-Request handling over network socket');
+  const dgram = require('dgram');
+  const liveAuthPort = 11812;
+  const liveAcctPort = 11813;
+  await radiusServer.start({ authPort: liveAuthPort, accountingPort: liveAcctPort });
+
+  const udpClient = dgram.createSocket('udp4');
+  const liveMac = 'cc:dd:ee:11:22:33';
+  const normalizedLiveMac = normalizeMac(liveMac);
+  authorizeMac(liveMac, {
+    access_type: 'instant',
+    bandwidth_down_kbps: 12000,
+    bandwidth_up_kbps: 6000,
+  }, 120 * 60 * 1000);
+
+  // Helper to send radius packet and await response
+  function sendRadiusPacket(code, id, attrs) {
+    return new Promise((resolve, reject) => {
+      const reqAuth = crypto.randomBytes(16);
+      const attrBuffers = [];
+      for (const [type, val] of attrs) {
+        const valBuf = Buffer.isBuffer(val) ? val : Buffer.from(String(val), 'utf8');
+        const header = Buffer.alloc(2);
+        header.writeUInt8(type, 0);
+        header.writeUInt8(2 + valBuf.length, 1);
+        attrBuffers.push(Buffer.concat([header, valBuf]));
+      }
+      const allAttrs = Buffer.concat(attrBuffers);
+      const totalLen = 20 + allAttrs.length;
+      const pkt = Buffer.alloc(totalLen);
+      pkt.writeUInt8(code, 0);
+      pkt.writeUInt8(id, 1);
+      pkt.writeUInt16BE(totalLen, 2);
+      reqAuth.copy(pkt, 4);
+      allAttrs.copy(pkt, 20);
+
+      const onMsg = (msg) => {
+        udpClient.off('message', onMsg);
+        resolve(radiusServer.parsePacket(msg));
+      };
+      udpClient.on('message', onMsg);
+      udpClient.send(pkt, liveAuthPort, '127.0.0.1', (err) => {
+        if (err) {
+          udpClient.off('message', onMsg);
+          reject(err);
+        }
+      });
+      setTimeout(() => {
+        udpClient.off('message', onMsg);
+        reject(new Error('RADIUS UDP timeout'));
+      }, 3000);
+    });
+  }
+
+  // 10a. Authorized MAC Access-Request -> Access-Accept
+  const acceptResp = await sendRadiusPacket(1, 101, [
+    [1, liveMac],
+    [31, liveMac],
+  ]);
+  assert.strictEqual(acceptResp.code, 2, 'Must receive Access-Accept (code 2)');
+  assert.strictEqual(acceptResp.id, 101);
+  console.log('✅ Live UDP Access-Accept received successfully');
+
+  // 10b. Unauthorized MAC Access-Request -> Access-Reject
+  const rejectResp = await sendRadiusPacket(1, 102, [
+    [1, 'ff:ff:ff:00:00:00'],
+    [31, 'ff:ff:ff:00:00:00'],
+  ]);
+  assert.strictEqual(rejectResp.code, 3, 'Must receive Access-Reject (code 3)');
+  assert.strictEqual(rejectResp.id, 102);
+  console.log('✅ Live UDP Access-Reject received successfully');
+
+  udpClient.close();
+  radiusServer.stop();
+
   // Clean up
-  db.prepare('DELETE FROM sessions WHERE session_id = ?').run(expiredSessionId);
-  db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedExpiredMac);
-  db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedOauthMac);
-  db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedTestMac);
-  db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
+  db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?').run(normalizedLiveMac);
 
   console.log('--- ALL TESTS PASSED SUCCESSFULLY! ---');
 }

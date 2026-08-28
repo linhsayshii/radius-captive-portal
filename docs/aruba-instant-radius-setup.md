@@ -4,41 +4,42 @@ Hướng dẫn tích hợp mạng WiFi Khách trên **Aruba Instant AP (Virtual 
 
 ---
 
-## Luồng xác thực (để hiểu trước khi cấu hình)
+## Luồng xác thực chuẩn (End-to-End Authentication Flow)
 
 ```
-1.  Client kết nối WiFi (chưa xác thực)
+1.  Client kết nối WiFi Guest (Role: Pre-Auth)
         │
         ▼
-2.  Aruba redirect client → captive portal
-    URL: /?mac=AA:BB:CC:DD:EE:FF&switchip=192.168.1.1&url=http://google.com
+2.  Aruba redirect HTTP request → Captive Portal
+    URL: https://captiveportal.hnglinh.io.vn/?mac=%m&switchip=%s&url=%u
         │
         ▼
-3.  Client mở portal trên trình duyệt
+3.  Client mở portal trên trình duyệt / popup CNA
         │
         ▼
-4.  User bấm "Truy cập ngay" (hoặc đăng nhập tài khoản)
+4.  User bấm "Đăng nhập nhanh" → Chọn gói cước (hoặc "Đăng nhập nội bộ")
         │
         ▼
 5.  Portal gọi POST /api/guest/connect
-    → upsert MAC vào bảng mac_authorizations
+    → Lưu MAC & thông số gói cước (băng thông, thời hạn) vào bảng mac_authorizations
         │
         ▼
-6.  Portal redirect client → trang đích (dst URL)
+6.  Portal submit Form POST sang Aruba Virtual Controller:
+    Action: http://<switchip>/cgi-bin/login (user=MAC, password=MAC, cmd=authenticate)
         │
         ▼
-7.  (Ngầm) Aruba gửi Access-Request đến RADIUS server (port 1812)
-    Calling-Station-Id = AA:BB:CC:DD:EE:FF
+7.  Aruba AP nhận form POST → gửi RADIUS Access-Request đến RADIUS server (port 1812)
+    User-Name = MAC, Calling-Station-Id = MAC
         │
         ▼
-8.  (Ngầm) RADIUS server kiểm tra mac_authorizations
-    → trả Access-Accept với bandwidth limits
+8.  RADIUS server kiểm tra mac_authorizations
+    → Trả RADIUS Access-Accept kèm thông số băng thông (WISPr/MikroTik) và Session-Timeout
         │
         ▼
-9.  (Ngầm) Aruba nhận Access-Accept → cho phép client truy cập Internet
+9.  Aruba nhận Access-Accept → chuyển client sang Role Guest (mở mạng) và redirect vào Internet
 ```
 
-> **Quan trọng:** Không cần form POST sang Aruba controller. Tất cả xác thực diễn ra qua RADIUS (port 1812). Portal chỉ cần redirect client sau khi authorize MAC.
+> **Quan trọng:** Tham số `switchip` trong URL là bắt buộc (`/?mac=%m&switchip=%s&url=%u`) để portal có thể gửi lệnh xác thực về CGI endpoint của Aruba Instant AP (`/cgi-bin/login`). Sau khi nhận được lệnh này, Aruba AP mới phát gói RADIUS `Access-Request` tới máy chủ.
 
 ---
 

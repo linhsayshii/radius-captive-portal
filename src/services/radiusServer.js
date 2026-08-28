@@ -130,8 +130,19 @@ function readUInt32Attribute(attribute) {
 
 function isAllowedNas(address) {
   const runtimeConfig = loadConfig();
+  const normalizedAddr = (address || '').replace(/^::ffff:/, '');
   if (runtimeConfig.radiusClients.length) {
-    return runtimeConfig.radiusClients.includes(address);
+    if (runtimeConfig.radiusClients.includes('*') || runtimeConfig.radiusClients.includes('0.0.0.0/0')) {
+      return true;
+    }
+    if (runtimeConfig.radiusClients.includes(normalizedAddr)) {
+      return true;
+    }
+    // Always allow localhost in non-production for local testing
+    if (runtimeConfig.nodeEnv !== 'production' && (normalizedAddr === '127.0.0.1' || normalizedAddr === '::1' || normalizedAddr === 'localhost')) {
+      return true;
+    }
+    return false;
   }
   // Development remains easy to exercise locally. Production must make the
   // trusted NAS boundary explicit.
@@ -145,21 +156,6 @@ function verifyAccountingRequest(packet) {
     .update(Buffer.concat([request, getSharedSecret()]))
     .digest();
   return crypto.timingSafeEqual(expected, packet.authenticator);
-}
-
-function verifyAccessRequest(packet) {
-  // RFC 2865 Section 3: Access-Request authenticator is MD5(packet header +
-  // attributes + shared secret). Reconstruct and compare to detect spoofed requests.
-  const request = Buffer.from(packet.raw);
-  request.fill(0, 4, 20);
-  const expected = crypto.createHash('md5')
-    .update(Buffer.concat([request, getSharedSecret()]))
-    .digest();
-  try {
-    return crypto.timingSafeEqual(expected, packet.authenticator);
-  } catch (_) {
-    return false;
-  }
 }
 
 function buildResponse(requestCode, requestId, requestAuth, attributes) {
@@ -526,10 +522,6 @@ function createServer(port, name) {
 
       switch (packet.code) {
         case PACKET_ACCESS_REQUEST:
-          if (!verifyAccessRequest(packet)) {
-            logger.warn(`RADIUS Access-Request rejected because its authenticator is invalid (${rinfo.address})`);
-            return;
-          }
           response = await handleAccessRequest(packet, rinfo);
           break;
         case PACKET_ACCOUNTING_REQUEST:

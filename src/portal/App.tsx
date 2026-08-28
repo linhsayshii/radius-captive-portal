@@ -5,6 +5,7 @@ import {
   CircleAlertIcon,
   LockKeyholeIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   WifiIcon,
 } from "lucide-react";
 
@@ -108,7 +109,7 @@ function readPortalContext(): PortalContext {
     "";
 
   if (!routerUrl && switchIp) {
-    // Only construct router login URL if switchIp is explicitly provided and valid
+    // Construct router login URL if switchIp is provided
     routerUrl = switchIp.startsWith("http") ? `${switchIp}/cgi-bin/login` : `http://${switchIp}/cgi-bin/login`;
   }
 
@@ -120,7 +121,7 @@ function readPortalContext(): PortalContext {
   };
 }
 
-function updateMode(mode?: "account") {
+function updateMode(mode?: "account" | "packages") {
   const params = new URLSearchParams(window.location.search);
   if (mode) {
     params.set("mode", mode);
@@ -129,6 +130,48 @@ function updateMode(mode?: "account") {
   }
   const search = params.toString();
   window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
+}
+
+function postLoginToRouter(context: PortalContext) {
+  if (!context.routerUrl) {
+    if (context.destination && context.destination.startsWith("http")) {
+      window.location.assign(context.destination);
+    } else {
+      window.location.assign("/success.html");
+    }
+    return;
+  }
+
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = context.routerUrl;
+
+  const fields: Array<[string, string]> = context.isAruba
+    ? [
+        ["user", context.mac],
+        ["username", context.mac],
+        ["password", context.mac],
+        ["cmd", "authenticate"],
+        ["url", context.destination || "http://captive.apple.com"],
+        ["Login", "Log In"],
+      ]
+    : [
+        ["username", context.mac],
+        ["password", context.mac],
+        ["dst", context.destination],
+      ];
+
+  fields.forEach(([name, value]) => {
+    if (!value) return;
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  });
+
+  document.body.appendChild(form);
+  form.submit();
 }
 
 function PortalFrame({ children }: { children: React.ReactNode }) {
@@ -148,7 +191,7 @@ function PortalFrame({ children }: { children: React.ReactNode }) {
             Kết nối an toàn, bắt đầu trong vài giây.
           </h1>
           <p className="mt-5 max-w-md text-base leading-7 text-hero-foreground/80">
-            Chọn truy cập nhanh hoặc xác thực bằng tài khoản được cấp quyền.
+            Chọn gói cước đăng nhập nhanh hoặc xác thực bằng tài khoản được cấp quyền.
           </p>
         </div>
         <div className="relative flex items-center gap-2 text-sm text-hero-foreground/80">
@@ -211,12 +254,19 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
         throw new Error(payload.error || "Không thể xác thực tài khoản.");
       }
 
-      // After account login the MAC is authorised. Redirect to destination —
-      // the NAS (Aruba/MikroTik) will complete authentication via RADIUS.
-      const destination = context.destination && context.destination.startsWith("http")
-        ? context.destination
-        : "http://captive.apple.com";
-      window.location.href = destination;
+      // Hand off to router
+      postLoginToRouter(context);
+
+      window.setTimeout(() => {
+        setNotice({
+          title: "Chưa hoàn tất xác thực",
+          message: context.routerUrl
+            ? "Máy chủ đã cấp quyền tài khoản nhưng router chưa phản hồi. Vui lòng thử lại."
+            : "Máy chủ đã cấp quyền tài khoản. Đang chuyển hướng...",
+          variant: "destructive",
+        });
+        setIsSubmitting(false);
+      }, 8000);
     } catch (error) {
       setNotice({
         title: "Đăng nhập chưa thành công",
@@ -246,7 +296,7 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
         <div className="mt-4 flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <LockKeyholeIcon aria-hidden="true" />
         </div>
-        <CardTitle className="mt-4 text-2xl tracking-tight">Đăng nhập tài khoản</CardTitle>
+        <CardTitle className="mt-4 text-2xl tracking-tight">Đăng nhập nội bộ</CardTitle>
         <CardDescription>
           Dùng tài khoản nội bộ hoặc Google đã được quản trị viên cấp quyền.
         </CardDescription>
@@ -293,9 +343,10 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
 
 function PortalLogin() {
   const [context, setContext] = useState<PortalContext>(() => readPortalContext());
-  const [view, setView] = useState<"choice" | "account" | "packages">(
-    new URLSearchParams(window.location.search).get("mode") === "account" ? "account" : "choice",
-  );
+  const [view, setView] = useState<"choice" | "account" | "packages">(() => {
+    const mode = new URLSearchParams(window.location.search).get("mode");
+    return mode === "account" ? "account" : mode === "packages" ? "packages" : "choice";
+  });
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [packages, setPackages] = useState<Package[]>([]);
@@ -330,34 +381,45 @@ function PortalLogin() {
   async function showPackages() {
     setNotice(null);
     setView("packages");
+    updateMode("packages");
     setSelectedPackage(null);
-    if (!packages.length) {
-      setLoadingPackages(true);
-      try {
-        const res = await fetch("/api/packages");
-        if (res.ok) {
-          const data = await res.json() as Package[];
-          setPackages(data.filter((p) => p.is_active));
-        }
-      } catch (_) {}
-      setLoadingPackages(false);
+    setLoadingPackages(true);
+    try {
+      const res = await fetch("/api/packages");
+      if (res.ok) {
+        const data = (await res.json()) as Package[];
+        setPackages(data.filter((p) => p.is_active));
+      }
+    } catch (_) {
+      setNotice({
+        title: "Lỗi tải gói cước",
+        message: "Không thể tải danh sách gói cước. Vui lòng thử lại.",
+        variant: "destructive",
+      });
     }
+    setLoadingPackages(false);
   }
 
-  async function connectInstantly() {
-    await showPackages();
-  }
+  async function connectWithSelectedPackage() {
+    if (!selectedPackage) {
+      setNotice({
+        title: "Chưa chọn gói cước",
+        message: "Vui lòng chọn một gói cước trước khi kết nối.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  async function connectWithPackage() {
     setNotice(null);
     setIsConnecting(true);
+
     try {
       const response = await fetch("/api/guest/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mac_address: context.mac || undefined,
-          package_id: selectedPackage || undefined,
+          package_id: selectedPackage,
         }),
       });
       const payload = await response.json();
@@ -366,10 +428,19 @@ function PortalLogin() {
         throw new Error(payload.error || "Không thể cấp quyền truy cập.");
       }
 
-      const destination = context.destination && context.destination.startsWith("http")
-        ? context.destination
-        : "http://captive.apple.com";
-      window.location.href = destination;
+      const activeMac = payload.mac_address || context.mac;
+      postLoginToRouter({ ...context, mac: activeMac });
+
+      window.setTimeout(() => {
+        setNotice({
+          title: "Aruba chưa hoàn tất xác thực",
+          message: context.routerUrl
+            ? "Máy chủ đã cấp quyền MAC nhưng Aruba chưa phản hồi. Kiểm tra cấu hình RADIUS và thử lại."
+            : "Máy chủ đã cấp quyền MAC nhưng URL captive portal thiếu switchip. Trên Aruba, đặt URL là /?mac=%m&switchip=%s&url=%u.",
+          variant: "destructive",
+        });
+        setIsConnecting(false);
+      }, 8000);
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",
@@ -380,33 +451,21 @@ function PortalLogin() {
     }
   }
 
-  async function connectInstantly() {
-    setNotice(null);
-    setIsConnecting(true);
-    try {
-      const response = await fetch("/api/guest/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mac_address: context.mac || undefined }),
-      });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload.error || "Không thể cấp quyền truy cập.");
-      }
-
-      const destination = context.destination && context.destination.startsWith("http")
-        ? context.destination
-        : "http://captive.apple.com";
-      window.location.href = destination;
-    } catch (error) {
-      setNotice({
-        title: "Kết nối chưa thành công",
-        message: error instanceof Error ? error.message : "Vui lòng thử lại.",
-        variant: "destructive",
-      });
-      setIsConnecting(false);
+  function formatDuration(minutes: number) {
+    if (minutes >= 1440 && minutes % 1440 === 0) {
+      return `${minutes / 1440} ngày`;
     }
+    if (minutes >= 60 && minutes % 60 === 0) {
+      return `${minutes / 60} giờ`;
+    }
+    return `${minutes} phút`;
+  }
+
+  function formatSpeed(kbps: number) {
+    if (kbps >= 1000) {
+      return `${(kbps / 1000).toFixed(kbps % 1000 === 0 ? 0 : 1)} Mbps`;
+    }
+    return `${kbps} kbps`;
   }
 
   return (
@@ -421,11 +480,11 @@ function PortalLogin() {
               Quay lại
             </Button>
             <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground lg:hidden">
-              <ShieldCheckIcon aria-hidden="true" />
+              <SparklesIcon aria-hidden="true" />
             </div>
             <CardTitle className="mt-4 text-2xl tracking-tight">Chọn gói cước</CardTitle>
             <CardDescription>
-              Chọn gói phù hợp với nhu cầu sử dụng của bạn.
+              Vui lòng chọn gói cước phù hợp với nhu cầu sử dụng của bạn.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -436,37 +495,42 @@ function PortalLogin() {
               </div>
             ) : packages.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">
-                Hiện không có gói cước nào khả dụng.
+                Hiện không có gói cước nào khả dụng trên hệ thống.
               </p>
             ) : (
               <div className="flex flex-col gap-3">
                 {packages.map((pkg) => (
                   <button
                     key={pkg.id}
+                    type="button"
                     onClick={() => setSelectedPackage(pkg.id)}
                     className={`
-                      w-full text-left p-4 rounded-lg border-2 transition-all cursor-pointer
-                      ${selectedPackage === pkg.id
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:border-primary/50"}
+                      w-full text-left p-4 rounded-xl border-2 transition-all cursor-pointer text-foreground
+                      ${
+                        selectedPackage === pkg.id
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-border hover:border-primary/40 bg-card"
+                      }
                     `}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold">{pkg.name}</span>
-                      <div className={`
-                        size-5 rounded-full border-2 flex items-center justify-center
-                        ${selectedPackage === pkg.id ? "border-primary bg-primary" : "border-muted-foreground"}
-                      `}>
+                      <span className="font-semibold text-base">{pkg.name}</span>
+                      <div
+                        className={`
+                        size-5 rounded-full border-2 flex items-center justify-center transition-colors
+                        ${selectedPackage === pkg.id ? "border-primary bg-primary" : "border-muted-foreground/40"}
+                      `}
+                      >
                         {selectedPackage === pkg.id && (
-                          <CheckCircle2Icon className="text-primary-foreground size-3" />
+                          <CheckCircle2Icon className="text-primary-foreground size-3.5" />
                         )}
                       </div>
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      <span>{pkg.duration_minutes} phút</span>
-                      <span>↓ {pkg.bandwidth_down_kbps} kbps</span>
-                      <span>↑ {pkg.bandwidth_up_kbps} kbps</span>
-                      {pkg.quota_mb && <span>{pkg.quota_mb} MB</span>}
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground/80">⏱️ {formatDuration(pkg.duration_minutes)}</span>
+                      <span>↓ {formatSpeed(pkg.bandwidth_down_kbps)}</span>
+                      <span>↑ {formatSpeed(pkg.bandwidth_up_kbps)}</span>
+                      {pkg.quota_mb ? <span>📦 {pkg.quota_mb} MB</span> : null}
                     </div>
                   </button>
                 ))}
@@ -474,21 +538,17 @@ function PortalLogin() {
             )}
             <Button
               size="lg"
-              className="h-11 w-full"
-              onClick={connectWithPackage}
+              className="h-11 w-full mt-2"
+              onClick={connectWithSelectedPackage}
               disabled={isConnecting || !selectedPackage}
             >
               {isConnecting ? <Spinner data-icon="inline-start" /> : null}
-              {isConnecting ? "Đang kết nối" : "Kết nối với gói đã chọn"}
+              {isConnecting ? "Đang kết nối..." : "Kết nối với gói đã chọn"}
             </Button>
           </CardContent>
           <CardFooter>
             <p className="text-sm leading-6 text-muted-foreground">
-              Hoặc dùng{" "}
-              <button className="text-primary underline-offset-2 hover:underline" onClick={connectInstantly}>
-                Truy cập nhanh
-              </button>{" "}
-              để kết nối ngay với cấu hình mặc định.
+              Thiết bị sẽ được cấp quyền truy cập mạng theo đúng thông số của gói đã chọn.
             </p>
           </CardFooter>
         </Card>
@@ -501,19 +561,25 @@ function PortalLogin() {
             <CardTitle className="mt-4 text-2xl tracking-tight">Chào mừng bạn</CardTitle>
             <CardDescription>Chọn cách truy cập WiFi phù hợp với bạn.</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-5">
+          <CardContent className="flex flex-col gap-4">
             <NoticeAlert notice={notice} />
-            <Button size="lg" className="h-11 w-full" onClick={connectInstantly} disabled={isConnecting}>
-              {isConnecting ? <Spinner data-icon="inline-start" /> : null}
-              {isConnecting ? "Đang kết nối" : "Truy cập ngay"}
+            <Button size="lg" className="h-12 w-full text-base font-semibold" onClick={showPackages}>
+              <SparklesIcon data-icon="inline-start" />
+              Đăng nhập nhanh
             </Button>
-            <Button variant="outline" size="lg" className="h-11 w-full" onClick={showAccount}>
-              Đăng nhập tài khoản
+            <Button
+              variant="outline"
+              size="lg"
+              className="h-12 w-full text-base font-medium"
+              onClick={showAccount}
+            >
+              <LockKeyholeIcon data-icon="inline-start" />
+              Đăng nhập nội bộ
             </Button>
           </CardContent>
           <CardFooter>
-            <p className="text-sm leading-6 text-muted-foreground">
-              Truy cập ngay sẽ cấp quyền tạm thời cho thiết bị này.
+            <p className="text-sm leading-6 text-muted-foreground text-center w-full">
+              Đăng nhập nhanh cho phép bạn chọn gói cước để truy cập Internet.
             </p>
           </CardFooter>
         </Card>
@@ -526,9 +592,9 @@ function SuccessScreen() {
   const context = readPortalContext();
 
   function finish() {
-    // After MAC is authorised the NAS (Aruba/MikroTik) will authenticate the
-    // user via RADIUS. Redirect to the destination — no form POST needed.
-    if (context.destination && context.destination.startsWith("http")) {
+    if (context.routerUrl) {
+      postLoginToRouter(context);
+    } else if (context.destination && context.destination.startsWith("http")) {
       window.location.assign(context.destination);
     } else {
       window.location.assign("http://captive.apple.com");
@@ -549,7 +615,7 @@ function SuccessScreen() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <Button size="lg" className="h-11 w-full" onClick={finish}>
-            Bắt đầu lướt web
+            {context.routerUrl ? "Hoàn tất kết nối" : "Bắt đầu lướt web"}
           </Button>
         </CardContent>
       </Card>
