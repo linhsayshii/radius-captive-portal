@@ -8,6 +8,7 @@ process.env.DATABASE_PATH = testDatabasePath;
 process.env.RADIUS_SHARED_SECRET = 'core-workflow-test-secret';
 
 const { db, macAuthorizations } = require('../src/db');
+const { getDevicesWithLiveStatus } = require('../src/services/deviceStatus');
 const {
   normalizeMac,
   authorizeMac,
@@ -79,10 +80,36 @@ function testDynamicAuthorizationPackets() {
   assert.strictEqual(vendorSpecificAttribute.value.readUInt32BE(0), 14988);
 }
 
+function testDeviceStatusUsesActiveSession() {
+  const macAddress = '112233445566';
+  const staleSessionId = 'stale-device-session';
+  const activeSessionId = 'active-device-session';
+
+  const insertSession = db.prepare(`
+    INSERT INTO sessions (mac_address, username, session_id, is_active, start_time, last_activity)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  insertSession.run(macAddress, 'old-user', staleSessionId, 0, '2026-08-28T15:00:00.000Z', '2026-08-28T15:00:10.000Z');
+  const staleSession = db.prepare('SELECT id FROM sessions WHERE session_id = ?').get(staleSessionId);
+  insertSession.run(macAddress, 'current-user', activeSessionId, 1, '2026-08-28T16:00:00.000Z', '2026-08-28T16:00:20.000Z');
+
+  db.prepare(`
+    INSERT INTO devices (mac_address, session_id, is_online, last_seen)
+    VALUES (?, ?, 0, '2026-08-28 15:00:10')
+  `).run(macAddress, staleSession.id);
+
+  const device = getDevicesWithLiveStatus().find((item) => item.mac_address === macAddress);
+  assert(device, 'Device must be listed');
+  assert.strictEqual(device.is_online, 1, 'An active RADIUS session must override a stale offline device flag');
+  assert.strictEqual(device.username, 'current-user');
+  assert.strictEqual(device.last_seen, '2026-08-28T16:00:20.000Z');
+}
+
 try {
   testFreshDatabaseStartup();
   testMacAuthorization();
   testDynamicAuthorizationPackets();
+  testDeviceStatusUsesActiveSession();
   console.log('Core portal/RADIUS workflow checks passed.');
 } finally {
   db.close();

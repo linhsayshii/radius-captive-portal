@@ -1,18 +1,13 @@
 const express = require('express');
-const { devices, sessions, db } = require('../../db');
+const { devices, sessions } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
 const { terminateSession } = require('../../services/sessionManager');
+const { getDevicesWithLiveStatus } = require('../../services/deviceStatus');
 
 const router = express.Router();
 
 router.get('/', requireApiAuth, (req, res) => {
-  const allDevices = db.prepare(`
-    SELECT d.*, s.username
-    FROM devices d
-    LEFT JOIN sessions s ON d.session_id = s.id
-    ORDER BY d.last_seen DESC
-  `).all();
-  res.json(allDevices);
+  res.json(getDevicesWithLiveStatus());
 });
 
 router.delete('/:mac', requireApiAuth, async (req, res) => {
