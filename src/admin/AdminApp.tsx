@@ -136,8 +136,12 @@ type PortalUser = {
   max_devices: number;
   package_id?: number | null;
   package_name?: string | null;
+  bandwidth_down_kbps?: number | null;
+  bandwidth_up_kbps?: number | null;
+  duration_minutes?: number | null;
   is_active: number | boolean;
 };
+type AccountAccessMode = "unlimited" | "custom" | "package";
 type Package = {
   id: number;
   name: string;
@@ -649,12 +653,18 @@ function AdminApp() {
     if (!editingUser) return;
     const form = new FormData(event.currentTarget);
     const pkgId = form.get("package_id");
+    const downKbps = form.get("bandwidth_down_kbps");
+    const upKbps = form.get("bandwidth_up_kbps");
+    const durationMinutes = form.get("duration_minutes");
     try {
       await apiRequest<{ success: boolean }>(`/api/users/${editingUser.id}`, {
         method: "PUT",
         body: JSON.stringify({
           max_devices: Number(form.get("max_devices")) || 3,
           package_id: pkgId && pkgId !== "" ? Number(pkgId) : null,
+          bandwidth_down_kbps: downKbps && downKbps !== "" ? Number(downKbps) : null,
+          bandwidth_up_kbps: upKbps && upKbps !== "" ? Number(upKbps) : null,
+          duration_minutes: durationMinutes && durationMinutes !== "" ? Number(durationMinutes) : null,
         }),
       });
       setEditingUser(null);
@@ -723,6 +733,9 @@ function AdminApp() {
                       password: form.get("password"),
                       max_devices: Number(form.get("max_devices")),
                       package_id: pkgId && pkgId !== "" ? Number(pkgId) : null,
+                      bandwidth_down_kbps: form.get("bandwidth_down_kbps") || null,
+                      bandwidth_up_kbps: form.get("bandwidth_up_kbps") || null,
+                      duration_minutes: form.get("duration_minutes") || null,
                     }),
                   });
                   setCreateDialogOpen(false);
@@ -966,16 +979,26 @@ function AccountsView({
   onToggle: (user: PortalUser) => void;
   onDelete: (user: PortalUser) => void;
 }) {
-  const [assignPackage, setAssignPackage] = useState(false);
+  const [createAccessMode, setCreateAccessMode] = useState<AccountAccessMode>("unlimited");
+  const [editAccessMode, setEditAccessMode] = useState<AccountAccessMode>("unlimited");
+
+  useEffect(() => {
+    if (!editingUser) return;
+    setEditAccessMode(editingUser.package_id
+      ? "package"
+      : editingUser.bandwidth_down_kbps && editingUser.bandwidth_up_kbps
+        ? "custom"
+        : "unlimited");
+  }, [editingUser]);
 
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-4">
         <div className="flex flex-col gap-1.5">
           <CardTitle>Tài khoản portal</CardTitle>
-          <CardDescription>Quản lý tài khoản người dùng và gán gói cước băng thông tương ứng.</CardDescription>
+          <CardDescription>Mỗi tài khoản có thể dùng gói cước, tốc độ riêng hoặc truy cập không giới hạn.</CardDescription>
         </div>
-        <Dialog open={createDialogOpen} onOpenChange={(open) => { setCreateDialogOpen(open); if (!open) setAssignPackage(false); }}>
+        <Dialog open={createDialogOpen} onOpenChange={(open) => { setCreateDialogOpen(open); if (!open) setCreateAccessMode("unlimited"); }}>
           <DialogTrigger render={<Button />}><UserPlusIcon data-icon="inline-start" />Thêm tài khoản</DialogTrigger>
           <DialogContent>
             <DialogHeader>
@@ -997,26 +1020,27 @@ function AccountsView({
                   <Input id="new-max-devices" name="max_devices" type="number" min="1" defaultValue="3" required />
                 </Field>
 
-                {/* Checkbox và Dropdown chọn gói cước */}
                 <Field>
-                  <div className="flex items-center gap-2 pt-1 pb-2">
-                    <input
-                      type="checkbox"
-                      id="assign-pkg-check"
-                      checked={assignPackage}
-                      onChange={(e) => setAssignPackage(e.target.checked)}
-                      className="size-4 rounded border-input text-primary focus:ring-primary cursor-pointer"
-                    />
-                    <label htmlFor="assign-pkg-check" className="text-sm font-medium cursor-pointer select-none">
-                      Áp dụng gói cước cho tài khoản này
-                    </label>
+                  <FieldLabel>Chính sách truy cập</FieldLabel>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {([
+                      ["unlimited", "Không giới hạn"],
+                      ["custom", "Tốc độ riêng"],
+                      ["package", "Gói cước"],
+                    ] as Array<[AccountAccessMode, string]>).map(([mode, label]) => (
+                      <label key={mode} className="flex cursor-pointer items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                        <input type="radio" name="access_mode" value={mode} checked={createAccessMode === mode} onChange={() => setCreateAccessMode(mode)} />
+                        {label}
+                      </label>
+                    ))}
                   </div>
-                  {assignPackage && (
-                    <div className="space-y-1.5 pl-6">
+                  {createAccessMode === "package" ? (
+                    <div className="mt-3 space-y-1.5">
                       <FieldLabel htmlFor="new-pkg-select">Chọn gói cước</FieldLabel>
                       <select
                         id="new-pkg-select"
                         name="package_id"
+                        required
                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         <option value="">-- Chọn gói cước --</option>
@@ -1027,7 +1051,27 @@ function AccountsView({
                         ))}
                       </select>
                     </div>
-                  )}
+                  ) : null}
+                  {createAccessMode === "custom" ? (
+                    <>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <Field>
+                          <FieldLabel htmlFor="new-user-down">Tải xuống (Kbps)</FieldLabel>
+                          <Input id="new-user-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue="5000" required />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="new-user-up">Tải lên (Kbps)</FieldLabel>
+                          <Input id="new-user-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue="2000" required />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="new-user-duration">Thời lượng (phút)</FieldLabel>
+                          <Input id="new-user-duration" name="duration_minutes" type="number" min="1" placeholder="Không giới hạn" />
+                        </Field>
+                      </div>
+                      <FieldDescription>Để trống thời lượng nếu chỉ cần giới hạn tốc độ.</FieldDescription>
+                    </>
+                  ) : null}
+                  {createAccessMode === "unlimited" ? <FieldDescription>Không gửi giới hạn tốc độ hoặc gói cước sang router.</FieldDescription> : null}
                 </Field>
 
                 <DialogFooter>
@@ -1049,7 +1093,7 @@ function AccountsView({
               <TableRow>
                 <TableHead>Tài khoản</TableHead>
                 <TableHead>Loại</TableHead>
-                <TableHead>Gói cước</TableHead>
+                <TableHead>Chính sách</TableHead>
                 <TableHead>Thiết bị</TableHead>
                 <TableHead>Trạng thái</TableHead>
                 <TableHead>Thao tác</TableHead>
@@ -1061,9 +1105,13 @@ function AccountsView({
                   <TableCell className="font-medium">{user.identifier}</TableCell>
                   <TableCell><Badge variant="outline">{user.type}</Badge></TableCell>
                   <TableCell>
-                    <Badge variant={user.package_name ? "secondary" : "outline"}>
-                      {user.package_name || "Mặc định"}
-                    </Badge>
+                    {user.package_name ? (
+                      <Badge variant="secondary">{user.package_name}</Badge>
+                    ) : user.bandwidth_down_kbps && user.bandwidth_up_kbps ? (
+                      <span className="text-sm">↓ {formatSpeed(user.bandwidth_down_kbps)} · ↑ {formatSpeed(user.bandwidth_up_kbps)}{user.duration_minutes ? ` · ${formatMinutes(user.duration_minutes)}` : ""}</span>
+                    ) : (
+                      <Badge variant="outline">Không giới hạn</Badge>
+                    )}
                   </TableCell>
                   <TableCell>{user.max_devices}</TableCell>
                   <TableCell>
@@ -1092,12 +1140,11 @@ function AccountsView({
         )}
       </CardContent>
 
-      {/* Dialog Sửa tài khoản & Đổi gói cước */}
       <Dialog open={Boolean(editingUser)} onOpenChange={(open) => { if (!open) setEditingUser(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Chỉnh sửa tài khoản</DialogTitle>
-            <DialogDescription>Cập nhật số thiết bị và gói cước cho tài khoản &quot;{editingUser?.identifier}&quot;.</DialogDescription>
+            <DialogDescription>Cập nhật số thiết bị và chính sách truy cập cho tài khoản &quot;{editingUser?.identifier}&quot;.</DialogDescription>
           </DialogHeader>
           {editingUser && (
             <form onSubmit={(event) => void onUpdate(event)}>
@@ -1108,21 +1155,58 @@ function AccountsView({
                 </Field>
 
                 <Field>
-                  <FieldLabel htmlFor="edit-user-pkg">Gói cước áp dụng</FieldLabel>
-                  <select
-                    id="edit-user-pkg"
-                    name="package_id"
-                    defaultValue={editingUser.package_id || ""}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">-- Mặc định hệ thống (Không gắn gói) --</option>
-                    {packages.map((pkg) => (
-                      <option key={pkg.id} value={pkg.id}>
-                        {pkg.name} ({formatMinutes(pkg.duration_minutes)} · ↓{formatSpeed(pkg.bandwidth_down_kbps)} / ↑{formatSpeed(pkg.bandwidth_up_kbps)})
-                      </option>
+                  <FieldLabel>Chính sách truy cập</FieldLabel>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {([
+                      ["unlimited", "Không giới hạn"],
+                      ["custom", "Tốc độ riêng"],
+                      ["package", "Gói cước"],
+                    ] as Array<[AccountAccessMode, string]>).map(([mode, label]) => (
+                      <label key={mode} className="flex cursor-pointer items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                        <input type="radio" name="access_mode" value={mode} checked={editAccessMode === mode} onChange={() => setEditAccessMode(mode)} />
+                        {label}
+                      </label>
                     ))}
-                  </select>
-                  <FieldDescription>Router sẽ nhận giới hạn tốc độ và thời lượng theo gói này khi user đăng nhập.</FieldDescription>
+                  </div>
+                  {editAccessMode === "package" ? (
+                    <div className="mt-3 space-y-1.5">
+                      <FieldLabel htmlFor="edit-user-pkg">Chọn gói cước</FieldLabel>
+                      <select
+                        id="edit-user-pkg"
+                        name="package_id"
+                        defaultValue={editingUser.package_id || ""}
+                        required
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        <option value="" disabled>-- Chọn gói cước --</option>
+                        {packages.map((pkg) => (
+                          <option key={pkg.id} value={pkg.id}>
+                            {pkg.name} ({formatMinutes(pkg.duration_minutes)} · ↓{formatSpeed(pkg.bandwidth_down_kbps)} / ↑{formatSpeed(pkg.bandwidth_up_kbps)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                  {editAccessMode === "custom" ? (
+                    <>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <Field>
+                          <FieldLabel htmlFor="edit-user-down">Tải xuống (Kbps)</FieldLabel>
+                          <Input id="edit-user-down" name="bandwidth_down_kbps" type="number" min="128" defaultValue={editingUser.bandwidth_down_kbps || 5000} required />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="edit-user-up">Tải lên (Kbps)</FieldLabel>
+                          <Input id="edit-user-up" name="bandwidth_up_kbps" type="number" min="128" defaultValue={editingUser.bandwidth_up_kbps || 2000} required />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="edit-user-duration">Thời lượng (phút)</FieldLabel>
+                          <Input id="edit-user-duration" name="duration_minutes" type="number" min="1" defaultValue={editingUser.duration_minutes || ""} placeholder="Không giới hạn" />
+                        </Field>
+                      </div>
+                      <FieldDescription>Để trống thời lượng nếu chỉ cần giới hạn tốc độ.</FieldDescription>
+                    </>
+                  ) : null}
+                  {editAccessMode === "unlimited" ? <FieldDescription>Router không nhận tốc độ hoặc gói cước giới hạn cho tài khoản này.</FieldDescription> : null}
                 </Field>
 
                 <DialogFooter>

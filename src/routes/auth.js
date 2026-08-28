@@ -112,6 +112,14 @@ router.post('/local', async (req, res) => {
       if (!mac) {
         return res.status(400).json({ error: 'Invalid MAC address' });
       }
+      // Refresh active accounting before granting this device a slot. The
+      // per-account cap is then enforced before the router receives Access-Accept.
+      try {
+        await require('../services/radiusAccountingSync').syncRadiusAccounting();
+      } catch (error) {
+        logger.warn('Unable to refresh accounting before enforcing device limit', { error: error.message, userId: user.id });
+      }
+      await require('../services/sessionManager').enforceDeviceLimit(user.id, { reserveMac: mac });
       const policy = getAccessPolicy(user);
       authorization = authorizeMac(mac, {
         user_id: user.id,
@@ -122,7 +130,8 @@ router.post('/local', async (req, res) => {
         bandwidth_up_kbps: policy.upKbps,
         quota_mb: policy.quotaTotalMb,
         max_devices: policy.maxDevices,
-      }, policy.durationSeconds * 1000);
+        duration_minutes: user.duration_minutes || null,
+      }, getAuthorizationDurationMs(user));
       try {
         await require('../services/radiusSync').synchronizeMac(mac);
       } catch (error) {

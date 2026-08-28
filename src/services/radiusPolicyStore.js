@@ -50,7 +50,14 @@ async function upsertAuthorization(entry) {
   const expiresAt = new Date(entry.expires_at);
   const seconds = Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
   const { radiusInterimIntervalSeconds } = loadConfig();
-  const replies = [reply('Session-Timeout', seconds), reply('Idle-Timeout', 300), reply('Acct-Interim-Interval', radiusInterimIntervalSeconds)];
+  const replies = [reply('Idle-Timeout', 300), reply('Acct-Interim-Interval', radiusInterimIntervalSeconds)];
+
+  // A local account with no selected package is intentionally unrestricted:
+  // keep its MAC authorization renewable in SQL but do not turn that renewal
+  // period into a RouterOS session duration limit.
+  if (!(entry.access_type === 'account' && !entry.package_id && !entry.duration_minutes)) {
+    replies.unshift(reply('Session-Timeout', seconds));
+  }
 
   if (entry.bandwidth_up_kbps && entry.bandwidth_down_kbps) {
     replies.push(reply('Mikrotik-Rate-Limit', `${entry.bandwidth_up_kbps}k/${entry.bandwidth_down_kbps}k`));

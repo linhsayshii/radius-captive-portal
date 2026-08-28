@@ -10,6 +10,7 @@ process.env.RADIUS_SHARED_SECRET = 'core-workflow-test-secret';
 const { db, macAuthorizations } = require('../src/db');
 const { getDevicesWithLiveStatus } = require('../src/services/deviceStatus');
 const { calculateAccountingRates } = require('../src/services/sessionManager');
+const { getAccessPolicy, getAuthorizationDurationMs } = require('../src/services/accessPolicy');
 const {
   normalizeMac,
   authorizeMac,
@@ -61,6 +62,32 @@ function testFreshDatabaseStartup() {
   const sessionsTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").get();
   assert(usersTable, 'Fresh portal database must initialize the users table before queries are prepared');
   assert(sessionsTable, 'Fresh portal database must initialize the sessions table before queries are prepared');
+  const userColumns = db.prepare("PRAGMA table_info(users)").all().map((column) => column.name);
+  assert(userColumns.includes('bandwidth_down_kbps'), 'Users must support a custom download rate');
+  assert(userColumns.includes('bandwidth_up_kbps'), 'Users must support a custom upload rate');
+}
+
+function testAccountAccessPolicies() {
+  const unlimited = getAccessPolicy({ id: 1, max_devices: 2, package_id: null });
+  assert.strictEqual(unlimited.packageId, null);
+  assert.strictEqual(unlimited.durationSeconds, null, 'An account without a package must not inherit a session duration');
+  assert.strictEqual(unlimited.downKbps, null, 'An account without a package must not inherit a download limit');
+  assert.strictEqual(unlimited.upKbps, null, 'An account without a package must not inherit an upload limit');
+  assert.strictEqual(getAuthorizationDurationMs({ id: 1, max_devices: 2, package_id: null }), 365 * 24 * 60 * 60 * 1000);
+
+  const customRate = getAccessPolicy({
+    id: 2,
+    max_devices: 1,
+    package_id: null,
+    bandwidth_down_kbps: 25000,
+    bandwidth_up_kbps: 10000,
+  });
+  assert.strictEqual(customRate.downKbps, 25000);
+  assert.strictEqual(customRate.upKbps, 10000);
+
+  const customDuration = getAccessPolicy({ id: 3, max_devices: 1, package_id: null, duration_minutes: 90 });
+  assert.strictEqual(customDuration.durationSeconds, 90 * 60);
+  assert.strictEqual(customDuration.authorizationDurationSeconds, 90 * 60);
 }
 
 function testDynamicAuthorizationPackets() {
@@ -142,6 +169,7 @@ function testAccountingDirection() {
 
 try {
   testFreshDatabaseStartup();
+  testAccountAccessPolicies();
   testMacAuthorization();
   testDynamicAuthorizationPackets();
   testDeviceStatusUsesActiveSession();

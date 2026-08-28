@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT,
   max_devices INTEGER DEFAULT 3,
   package_id INTEGER REFERENCES packages(id),
+  bandwidth_down_kbps INTEGER,
+  bandwidth_up_kbps INTEGER,
+  duration_minutes INTEGER,
   is_active BOOLEAN DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -96,7 +99,8 @@ CREATE TABLE IF NOT EXISTS mac_authorizations (
   bandwidth_down_kbps INTEGER,
   bandwidth_up_kbps INTEGER,
   quota_mb INTEGER,
-  max_devices INTEGER
+  max_devices INTEGER,
+  duration_minutes INTEGER
 );
 
 -- Connection Logs

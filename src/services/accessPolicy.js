@@ -1,25 +1,14 @@
 const { packages } = require('../db');
 
-const DEFAULT_DURATION_SECONDS = 24 * 60 * 60;
-const DEFAULT_DOWN_KBPS = 5000;
-const DEFAULT_UP_KBPS = 2000;
 const DEFAULT_MAX_DEVICES = 3;
+// A MAC authorization must have an expiry for RADIUS SQL lookups. Accounts
+// without a package do not receive a Session-Timeout, so this is only the
+// authorization renewal horizon, not a per-login usage limit.
+const UNLIMITED_ACCOUNT_AUTHORIZATION_SECONDS = 365 * 24 * 60 * 60;
 
-function logNoPackageWarning(userId) {
-  // Avoid spamming logs for repeated calls from the idle checker
-  if (logNoPackageWarning._logged === undefined) logNoPackageWarning._logged = new Set();
-  if (logNoPackageWarning._logged.has(userId)) return;
-  logNoPackageWarning._logged.add(userId);
-  const logger = require('../utils/logger');
-  logger.warn('getAccessPolicy: user has no package assigned, using system defaults', {
-    userId,
-    defaults: {
-      durationSeconds: DEFAULT_DURATION_SECONDS,
-      downKbps: DEFAULT_DOWN_KBPS,
-      upKbps: DEFAULT_UP_KBPS,
-      maxDevices: DEFAULT_MAX_DEVICES,
-    },
-  });
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
 }
 
 /**
@@ -32,10 +21,11 @@ function getAccessPolicy(user) {
     ? Number(user.package_id)
     : null;
   const pkg = packageId ? packages.getById.get(packageId) : null;
-
-  if (!packageId) {
-    logNoPackageWarning(user?.id || user?.identifier || 'unknown');
-  }
+  const manualDownKbps = positiveInteger(user?.bandwidth_down_kbps);
+  const manualUpKbps = positiveInteger(user?.bandwidth_up_kbps);
+  const manualDurationMinutes = positiveInteger(user?.duration_minutes);
+  const hasManualRateLimit = Boolean(manualDownKbps && manualUpKbps);
+  const manualDurationSeconds = manualDurationMinutes ? manualDurationMinutes * 60 : null;
 
   return {
     package: pkg,
@@ -43,20 +33,23 @@ function getAccessPolicy(user) {
     packageValid: !packageId || Boolean(pkg?.is_active),
     durationSeconds: pkg?.duration_minutes
       ? Math.max(1, Number(pkg.duration_minutes) * 60)
-      : DEFAULT_DURATION_SECONDS,
+      : manualDurationSeconds,
+    authorizationDurationSeconds: pkg?.duration_minutes
+      ? Math.max(1, Number(pkg.duration_minutes) * 60)
+      : manualDurationSeconds || UNLIMITED_ACCOUNT_AUTHORIZATION_SECONDS,
     quotaTotalMb: pkg?.quota_mb ? Number(pkg.quota_mb) : null,
-    downKbps: pkg?.bandwidth_down_kbps || DEFAULT_DOWN_KBPS,
-    upKbps: pkg?.bandwidth_up_kbps || DEFAULT_UP_KBPS,
-    maxDevices: pkg?.max_devices || user?.max_devices || DEFAULT_MAX_DEVICES,
+    downKbps: pkg?.bandwidth_down_kbps || (hasManualRateLimit ? manualDownKbps : null),
+    upKbps: pkg?.bandwidth_up_kbps || (hasManualRateLimit ? manualUpKbps : null),
+    maxDevices: pkg?.max_devices || positiveInteger(user?.max_devices) || DEFAULT_MAX_DEVICES,
   };
 }
 
 function getAuthorizationDurationMs(user) {
-  return getAccessPolicy(user).durationSeconds * 1000;
+  return getAccessPolicy(user).authorizationDurationSeconds * 1000;
 }
 
 module.exports = {
-  DEFAULT_DURATION_SECONDS,
+  UNLIMITED_ACCOUNT_AUTHORIZATION_SECONDS,
   getAccessPolicy,
   getAuthorizationDurationMs,
 };

@@ -45,8 +45,9 @@ async function checkIdleSessions() {
         (Date.now() - toTimestampMs(session.start_time)) / 1000
       );
 
-      // Check package duration if linked
-      let maxDurationSeconds = 24 * 60 * 60; // 24 hours default
+      // Package sessions have a duration. An account with no selected package
+      // is intentionally not converted to the old 24-hour default policy.
+      let maxDurationSeconds = null;
       if (session.package_id) {
         const pkg = packages.getById.get(session.package_id);
         if (pkg?.duration_minutes) {
@@ -60,7 +61,7 @@ async function checkIdleSessions() {
       }
 
       // Check if session expired by duration
-      if (durationSeconds >= maxDurationSeconds) {
+      if (maxDurationSeconds && durationSeconds >= maxDurationSeconds) {
         logger.info(`Session ${session.session_id} expired by duration limit (${durationSeconds}s / ${maxDurationSeconds}s)`);
         await terminateSession(session, 'duration_expired', { allowLocalTermination: true });
         continue;
@@ -162,8 +163,11 @@ async function terminateSession(session, reason, { allowLocalTermination = false
       const { macWhitelist } = require('../routes/api/guest');
       macWhitelist.delete(session.mac_address);
     } catch (_) {}
-    if (['duration_expired', 'quota_exceeded', 'mac_auth_expired', 'admin_revoked_mac', 'admin_test_kick'].includes(reason)) {
+    if (['duration_expired', 'quota_exceeded', 'mac_auth_expired', 'admin_revoked_mac', 'admin_test_kick', 'device_limit'].includes(reason)) {
       macAuthorizations.delete.run(session.mac_address);
+      try {
+        require('./radiusSync').queueDelete(session.mac_address);
+      } catch (_) {}
     }
   }
 
@@ -171,32 +175,28 @@ async function terminateSession(session, reason, { allowLocalTermination = false
   return { success: true, disconnect, localOnly: !disconnect.attempted || !disconnect.success };
 }
 
-async function handleNewConnection(userId, macAddress, nasIp) {
+async function enforceDeviceLimit(userId, { reserveMac } = {}) {
   const user = users.getById.get(userId);
-  if (!user) return;
+  if (!user) return { terminated: 0 };
 
-  // Check device limit for user
   const policy = getAccessPolicy(user);
-  const maxDevices = policy.maxDevices;
-  const onlineDevices = devices.getOnlineByUser.all(userId);
+  const activeSessions = sessions.getActiveByUser.all(userId);
+  const existingSessions = activeSessions.filter((session) => !reserveMac || session.mac_address !== reserveMac);
+  const permittedExistingSessions = Math.max(0, policy.maxDevices - (reserveMac ? 1 : 0));
+  const sessionsToTerminate = existingSessions
+    .sort((left, right) => toTimestampMs(left.start_time) - toTimestampMs(right.start_time))
+    .slice(0, Math.max(0, existingSessions.length - permittedExistingSessions));
 
-  // The device that just connected is already online, so enforce only when it
-  // pushes the count beyond the limit. Using >= disconnected a user's first
-  // device whenever max_devices was 1.
-  if (onlineDevices.length > maxDevices) {
-    // Find oldest active device
-    const oldest = onlineDevices.reduce((a, b) =>
-      toTimestampMs(a.first_seen) < toTimestampMs(b.first_seen) ? a : b
-    );
-
-    if (oldest.session_id) {
-      const session = sessions.getById.get(oldest.session_id);
-      if (session && session.is_active) {
-        logger.info(`Device limit reached for user ${user.identifier}. Kicking oldest session ${session.session_id}`);
-        await terminateSession(session, 'device_limit');
-      }
-    }
+  for (const session of sessionsToTerminate) {
+    logger.info(`Device limit reached for user ${user.identifier}. Kicking oldest session ${session.session_id}`);
+    await terminateSession(session, 'device_limit', { allowLocalTermination: true });
   }
+
+  return { terminated: sessionsToTerminate.length };
+}
+
+async function handleNewConnection(userId) {
+  await enforceDeviceLimit(userId);
 }
 
 // In-memory store for live session metrics
@@ -342,6 +342,7 @@ module.exports = {
   startIdleChecker,
   stopIdleChecker,
   handleNewConnection,
+  enforceDeviceLimit,
   updateSessionActivity,
   terminateSession,
   checkIdleSessions,

@@ -1,6 +1,7 @@
 const { db, macAuthorizations, radiusSyncOutbox } = require('../db');
 const { upsertAuthorization, removeAuthorization, getRecentAccounting } = require('./radiusPolicyStore');
 const { disconnectSession } = require('./radiusClient');
+const { getAccessPolicy } = require('./accessPolicy');
 const logger = require('../utils/logger');
 
 const OUTBOX_BATCH_SIZE = 100;
@@ -13,10 +14,9 @@ function queueDelete(macAddress) {
   radiusSyncOutbox.enqueue.run(macAddress, 'delete');
 }
 
-function expirationForPolicy(connectedAt, pkg) {
+function expirationForPolicy(connectedAt, durationSeconds) {
   const start = new Date(connectedAt).getTime();
-  const durationMinutes = pkg?.duration_minutes || (24 * 60);
-  const expiresAt = new Date((Number.isFinite(start) ? start : Date.now()) + durationMinutes * 60 * 1000);
+  const expiresAt = new Date((Number.isFinite(start) ? start : Date.now()) + durationSeconds * 1000);
   return expiresAt.toISOString();
 }
 
@@ -79,7 +79,7 @@ function applyPackageSnapshot(packageId, pkg) {
   const transaction = db.transaction(() => {
     for (const authorization of authorizations) {
       update.run(pkg.bandwidth_down_kbps, pkg.bandwidth_up_kbps, pkg.quota_mb, pkg.max_devices,
-        expirationForPolicy(authorization.connected_at, pkg), authorization.mac_address);
+        expirationForPolicy(authorization.connected_at, pkg.duration_minutes * 60), authorization.mac_address);
       queueUpsert(authorization.mac_address);
     }
   });
@@ -100,16 +100,17 @@ function revokeUserAuthorizations(userId) {
   return authorizations.map((authorization) => authorization.mac_address);
 }
 
-function applyUserPackageSnapshot(userId, pkg, maxDevices) {
-  const authorizations = macAuthorizations.getByUser.all(userId);
+function applyUserPackageSnapshot(user) {
+  const policy = getAccessPolicy(user);
+  const authorizations = macAuthorizations.getByUser.all(user.id);
   const update = db.prepare(`UPDATE mac_authorizations SET
-    package_id = ?, bandwidth_down_kbps = ?, bandwidth_up_kbps = ?, quota_mb = ?, max_devices = ?, expires_at = ?
+    package_id = ?, bandwidth_down_kbps = ?, bandwidth_up_kbps = ?, quota_mb = ?, max_devices = ?, duration_minutes = ?, expires_at = ?
     WHERE mac_address = ?`);
   const transaction = db.transaction(() => {
     for (const authorization of authorizations) {
-      update.run(pkg?.id || null, pkg?.bandwidth_down_kbps || 5000, pkg?.bandwidth_up_kbps || 2000,
-        pkg?.quota_mb || null, pkg?.max_devices || maxDevices || 3,
-        expirationForPolicy(authorization.connected_at, pkg), authorization.mac_address);
+      update.run(policy.packageId, policy.downKbps, policy.upKbps,
+        policy.quotaTotalMb, policy.maxDevices, user.duration_minutes || null,
+        expirationForPolicy(authorization.connected_at, policy.authorizationDurationSeconds), authorization.mac_address);
       queueUpsert(authorization.mac_address);
     }
   });

@@ -243,6 +243,7 @@ function authorizeMac(mac, details = {}, durationMs = 24 * 60 * 60 * 1000) {
     bandwidth_up_kbps: details.bandwidth_up_kbps || null,
     quota_mb: details.quota_mb || null,
     max_devices: details.max_devices || null,
+    duration_minutes: details.duration_minutes || null,
   });
   return entry;
 }

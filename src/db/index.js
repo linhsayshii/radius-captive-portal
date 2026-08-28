@@ -43,6 +43,18 @@ try {
 } catch (_) {}
 
 try {
+  db.exec(`ALTER TABLE users ADD COLUMN bandwidth_down_kbps INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN bandwidth_up_kbps INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN duration_minutes INTEGER;`);
+} catch (_) {}
+
+try {
   db.exec(`ALTER TABLE mac_authorizations ADD COLUMN package_id INTEGER REFERENCES packages(id);`);
 } catch (_) {}
 
@@ -60,6 +72,10 @@ try {
 
 try {
   db.exec(`ALTER TABLE mac_authorizations ADD COLUMN max_devices INTEGER;`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE mac_authorizations ADD COLUMN duration_minutes INTEGER;`);
 } catch (_) {}
 
 for (const definition of [
@@ -93,18 +109,25 @@ const userQueries = {
   getByIdentifier: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.identifier = ?'),
   getByEmail: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.email = ?'),
   getAll: db.prepare(`
-    SELECT u.*, p.name as package_name, p.bandwidth_down_kbps, p.bandwidth_up_kbps, p.duration_minutes
+    SELECT u.*, p.name as package_name,
+      p.bandwidth_down_kbps as package_bandwidth_down_kbps,
+      p.bandwidth_up_kbps as package_bandwidth_up_kbps,
+      p.duration_minutes as package_duration_minutes
     FROM users u LEFT JOIN packages p ON u.package_id = p.id
     ORDER BY u.created_at DESC
   `),
   countByPackage: db.prepare('SELECT COUNT(*) AS count FROM users WHERE package_id = ?'),
   create: db.prepare(`
-    INSERT INTO users (type, identifier, email, password_hash, display_name, max_devices, package_id)
-    VALUES (@type, @identifier, @email, @password_hash, @display_name, @max_devices, @package_id)
+    INSERT INTO users (type, identifier, email, password_hash, display_name, max_devices, package_id,
+      bandwidth_down_kbps, bandwidth_up_kbps, duration_minutes)
+    VALUES (@type, @identifier, @email, @password_hash, @display_name, @max_devices, @package_id,
+      @bandwidth_down_kbps, @bandwidth_up_kbps, @duration_minutes)
   `),
   update: db.prepare(`
     UPDATE users SET email = @email, display_name = @display_name,
-    max_devices = @max_devices, is_active = @is_active, package_id = @package_id
+    max_devices = @max_devices, is_active = @is_active, package_id = @package_id,
+    bandwidth_down_kbps = @bandwidth_down_kbps, bandwidth_up_kbps = @bandwidth_up_kbps,
+    duration_minutes = @duration_minutes
     WHERE id = @id
   `),
   delete: db.prepare('DELETE FROM users WHERE id = ?'),
@@ -137,6 +160,9 @@ const sessionQueries = {
     SELECT s.*, u.type as user_type, u.display_name, u.email
     FROM sessions s LEFT JOIN users u ON s.user_id = u.id
     WHERE s.is_active = 1 ORDER BY s.start_time DESC
+  `),
+  getActiveByUser: db.prepare(`
+    SELECT * FROM sessions WHERE user_id = ? AND is_active = 1 ORDER BY start_time ASC
   `),
   getActiveByMac: db.prepare(`
     SELECT * FROM sessions WHERE (mac_address = ? OR username = ?) AND is_active = 1 LIMIT 1
@@ -232,15 +258,15 @@ const logQueries = {
 
 const macAuthorizationQueries = {
   upsert: db.prepare(`
-    INSERT INTO mac_authorizations (mac_address, user_id, username, access_type, connected_at, expires_at, ip_address, user_agent, package_id, bandwidth_down_kbps, bandwidth_up_kbps, quota_mb, max_devices)
-    VALUES (@mac_address, @user_id, @username, @access_type, @connected_at, @expires_at, @ip_address, @user_agent, @package_id, @bandwidth_down_kbps, @bandwidth_up_kbps, @quota_mb, @max_devices)
+    INSERT INTO mac_authorizations (mac_address, user_id, username, access_type, connected_at, expires_at, ip_address, user_agent, package_id, bandwidth_down_kbps, bandwidth_up_kbps, quota_mb, max_devices, duration_minutes)
+    VALUES (@mac_address, @user_id, @username, @access_type, @connected_at, @expires_at, @ip_address, @user_agent, @package_id, @bandwidth_down_kbps, @bandwidth_up_kbps, @quota_mb, @max_devices, @duration_minutes)
     ON CONFLICT(mac_address) DO UPDATE SET
       user_id = excluded.user_id, username = excluded.username, access_type = excluded.access_type,
       connected_at = excluded.connected_at, expires_at = excluded.expires_at,
       ip_address = excluded.ip_address, user_agent = excluded.user_agent,
       package_id = excluded.package_id, bandwidth_down_kbps = excluded.bandwidth_down_kbps,
       bandwidth_up_kbps = excluded.bandwidth_up_kbps, quota_mb = excluded.quota_mb,
-      max_devices = excluded.max_devices
+      max_devices = excluded.max_devices, duration_minutes = excluded.duration_minutes
   `),
   get: db.prepare('SELECT * FROM mac_authorizations WHERE mac_address = ?'),
   getByUser: db.prepare('SELECT * FROM mac_authorizations WHERE user_id = ?'),
