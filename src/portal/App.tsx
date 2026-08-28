@@ -100,12 +100,21 @@ function clearPendingRouterLogin() {
   }
 }
 
-function isValidMac(val: string): boolean {
-  if (!val || typeof val !== "string") return false;
-  try {
-    val = decodeURIComponent(val);
-  } catch (_) {}
-  return Boolean(normalizeMacAddress(val));
+function normalizeQueryMac(value: string): string {
+  let decoded = value;
+  // A MAC from RouterOS' `$(mac-esc)` can arrive double-escaped. Decode the
+  // bounded query value before normalizing it; otherwise `%3A` becomes `3a`
+  // when the punctuation is stripped and RADIUS receives a different user.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return normalizeMacAddress(decoded);
 }
 
 function findValidMac(params: URLSearchParams): string {
@@ -126,13 +135,15 @@ function findValidMac(params: URLSearchParams): string {
   for (const key of keys) {
     const values = params.getAll(key);
     for (const v of values) {
-      if (isValidMac(v)) return v;
+      const mac = normalizeQueryMac(v);
+      if (mac) return mac;
     }
   }
 
   // Also check all query params
   for (const [, value] of params.entries()) {
-    if (isValidMac(value)) return value;
+    const mac = normalizeQueryMac(value);
+    if (mac) return mac;
   }
 
   return "";
@@ -220,7 +231,7 @@ function postLoginToRouter(context: PortalContext) {
 
   // Keep the RADIUS identity stable across router formats. The backend stores
   // and authorizes this canonical MAC value in FreeRADIUS' SQL policy store.
-  const radiusIdentity = context.mac.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
+  const radiusIdentity = normalizeQueryMac(context.mac);
   let destination = context.destination;
   try {
     const loginHost = context.routerUrl ? new URL(context.routerUrl).host : "";
