@@ -29,10 +29,16 @@ const sessionConfig = {
   secret: config.sessionSecret,
   resave: false,
   saveUninitialized: false,
-  name: 'wifiportal.sid',
+  // New name avoids an old Secure-only cookie blocking the replacement when
+  // an administrator returns through direct HTTP.
+  name: 'wifiportal.sid.v2',
   cookie: {
     httpOnly: true,
-    secure: config.nodeEnv === 'production',
+    // The bundled Compose stack exposes HTTP directly on port 3000, while a
+    // production deployment may also sit behind an HTTPS reverse proxy.
+    // "auto" emits Secure cookies only for HTTPS requests, preventing the
+    // login-success/redirect-to-login loop on direct HTTP administration.
+    secure: 'auto',
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   },
