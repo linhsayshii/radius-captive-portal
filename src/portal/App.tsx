@@ -114,6 +114,19 @@ function readPortalContext(): PortalContext {
     params.get("login_url") ||
     "";
 
+  // RouterOS login pages sometimes submit the login URL percent-encoded inside
+  // another form field. Decode a small, bounded number of times so it remains
+  // an absolute HotSpot URL instead of becoming a relative `/http%3A...` path.
+  for (let attempt = 0; attempt < 2 && routerUrl; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(routerUrl);
+      if (decoded === routerUrl) break;
+      routerUrl = decoded;
+    } catch {
+      break;
+    }
+  }
+
   if (!routerUrl && switchIp) {
     if (switchIp.startsWith("http://") || switchIp.startsWith("https://")) {
       const clean = switchIp.replace(/\/+$/, "");
