@@ -248,7 +248,13 @@ function formatBytes(bytes: number | null | undefined) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "Chưa có";
-  const date = new Date(value);
+  // SQLite CURRENT_TIMESTAMP is UTC but is returned without an offset, for
+  // example "2026-08-28 16:00:50". Browsers otherwise parse that format as
+  // local time, displaying it seven hours behind in Vietnam.
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(" ", "T")}Z`
+    : value;
+  const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? "Chưa có" : date.toLocaleString("vi-VN");
 }
 
