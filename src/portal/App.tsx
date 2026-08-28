@@ -330,6 +330,7 @@ function PortalLogin() {
   async function showPackages() {
     setNotice(null);
     setView("packages");
+    setSelectedPackage(null);
     if (!packages.length) {
       setLoadingPackages(true);
       try {
@@ -341,6 +342,10 @@ function PortalLogin() {
       } catch (_) {}
       setLoadingPackages(false);
     }
+  }
+
+  async function connectInstantly() {
+    await showPackages();
   }
 
   async function connectWithPackage() {
@@ -501,9 +506,6 @@ function PortalLogin() {
             <Button size="lg" className="h-11 w-full" onClick={connectInstantly} disabled={isConnecting}>
               {isConnecting ? <Spinner data-icon="inline-start" /> : null}
               {isConnecting ? "Đang kết nối" : "Truy cập ngay"}
-            </Button>
-            <Button variant="outline" size="lg" className="h-11 w-full" onClick={showPackages}>
-              Chọn gói cước
             </Button>
             <Button variant="outline" size="lg" className="h-11 w-full" onClick={showAccount}>
               Đăng nhập tài khoản
