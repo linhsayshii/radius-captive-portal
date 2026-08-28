@@ -5,6 +5,19 @@ const logger = require('../utils/logger');
 
 const ACTIVITY_THRESHOLD = 1024; // bytes
 const IDLE_CHECK_INTERVAL = 30 * 1000; // 30 seconds
+// A manual kick must revoke the MAC grant as well as terminate the active
+// HotSpot session. Otherwise RouterOS can immediately authenticate the same
+// MAC again from the still-present RADIUS policy, bypassing captive portal.
+const REVOCATION_REASONS = new Set([
+  'duration_expired',
+  'quota_exceeded',
+  'mac_auth_expired',
+  'admin_revoked_mac',
+  'admin_test_kick',
+  'admin',
+  'admin_device_kick',
+  'device_limit',
+]);
 
 let idleCheckTimer = null;
 
@@ -163,11 +176,27 @@ async function terminateSession(session, reason, { allowLocalTermination = false
       const { macWhitelist } = require('../routes/api/guest');
       macWhitelist.delete(session.mac_address);
     } catch (_) {}
-    if (['duration_expired', 'quota_exceeded', 'mac_auth_expired', 'admin_revoked_mac', 'admin_test_kick', 'device_limit'].includes(reason)) {
+    if (REVOCATION_REASONS.has(reason)) {
       macAuthorizations.delete.run(session.mac_address);
       try {
-        require('./radiusSync').queueDelete(session.mac_address);
-      } catch (_) {}
+        // Do not wait for the 30-second outbox worker here. A client that is
+        // kicked from the dashboard can probe the network immediately; the
+        // RADIUS row must already be gone so the probe enters captive portal.
+        await require('./radiusSync').removeMacFromRadius(session.mac_address);
+      } catch (error) {
+        logger.error('Unable to revoke FreeRADIUS policy after session termination', {
+          macAddress: session.mac_address,
+          reason,
+          error: error.message,
+        });
+        if (!allowLocalTermination) {
+          return {
+            success: false,
+            error: 'Đã ngắt phiên trên Router nhưng chưa thể thu hồi quyền RADIUS để yêu cầu đăng nhập lại',
+            disconnect,
+          };
+        }
+      }
     }
   }
 

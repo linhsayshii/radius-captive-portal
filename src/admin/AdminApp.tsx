@@ -698,15 +698,15 @@ function AdminApp() {
           <div className="flex flex-col gap-6 p-5 sm:p-8">
             {pageError ? <LoadError message={pageError} /> : null}
             {view === "overview" ? <Overview data={data} isLoading={isLoading} sessions={recentSessions} onSelectSessions={() => setView("sessions")} /> : null}
-            {view === "sessions" ? <SessionsView sessions={data.sessions} accounting={data.accounting} isLoading={isLoading} onTerminate={(session) => queueAction("Ngắt phiên kết nối?", `Phiên của ${session.username} sẽ bị kết thúc ngay.`, async () => {
+            {view === "sessions" ? <SessionsView sessions={data.sessions} accounting={data.accounting} isLoading={isLoading} onTerminate={(session) => queueAction("Ngắt phiên và yêu cầu đăng nhập lại?", `Phiên của ${session.username} sẽ bị kết thúc và thiết bị sẽ trở lại Captive Portal.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/sessions/${session.id}`, { method: "DELETE" });
               await loadData(true);
-              toast.add({ title: "Đã ngắt phiên kết nối", type: "success" });
+              toast.add({ title: "Đã ngắt phiên, thiết bị cần đăng nhập lại", type: "success" });
             })} /> : null}
-            {view === "devices" ? <DevicesView devices={data.devices} isLoading={isLoading} onDisconnect={(device) => queueAction("Ngắt thiết bị?", `Thiết bị ${formatMacAddress(device.mac_address)} sẽ bị đưa về trạng thái ngoại tuyến.`, async () => {
+            {view === "devices" ? <DevicesView devices={data.devices} isLoading={isLoading} onDisconnect={(device) => queueAction("Ngắt thiết bị và yêu cầu đăng nhập lại?", `Thiết bị ${formatMacAddress(device.mac_address)} sẽ bị ngắt và trở lại Captive Portal.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/devices/${encodeURIComponent(device.mac_address)}`, { method: "DELETE" });
               await loadData(true);
-              toast.add({ title: "Đã ngắt thiết bị", type: "success" });
+              toast.add({ title: "Đã ngắt thiết bị, cần đăng nhập lại", type: "success" });
             })} /> : null}
             {view === "access" ? <AccessView entries={data.macAuthorizations} isLoading={isLoading} onRevoke={(entry) => queueAction("Thu hồi quyền MAC?", `Thiết bị ${formatMacAddress(entry.mac)} sẽ không thể truy cập khi gửi yêu cầu RADIUS kế tiếp.`, async () => {
               await apiRequest<{ success: boolean }>(`/api/guest/whitelist/${encodeURIComponent(entry.mac)}`, { method: "DELETE" });
