@@ -99,7 +99,13 @@ function readPortalContext(): PortalContext {
   const mac = findValidMac(params);
 
   const switchIp = params.get("switchip") || params.get("switch_ip") || params.get("ap_ip") || "";
-  const isAruba = Boolean(switchIp || params.get("cmd") === "login");
+  const isAruba = Boolean(
+    switchIp ||
+    params.get("cmd") === "login" ||
+    params.get("opcode") ||
+    params.get("essid") ||
+    params.get("apname")
+  );
 
   let routerUrl =
     params.get("link-login-only") ||
@@ -108,9 +114,18 @@ function readPortalContext(): PortalContext {
     params.get("login_url") ||
     "";
 
-  if (!routerUrl && switchIp) {
-    // Construct router login URL if switchIp is provided
-    routerUrl = switchIp.startsWith("http") ? `${switchIp}/cgi-bin/login` : `http://${switchIp}/cgi-bin/login`;
+  if (!routerUrl && isAruba) {
+    // For Aruba Instant AP, swarm.cgi is the standard authentication endpoint.
+    // securelogin.arubanetworks.com is the default internal DNS & SSL cert hostname.
+    const proto = window.location.protocol === "https:" ? "https:" : "http:";
+    if (switchIp && switchIp.startsWith("http")) {
+      const clean = switchIp.replace(/\/+$/, "");
+      routerUrl = clean.endsWith("/swarm.cgi") ? clean : `${clean}/swarm.cgi`;
+    } else if (switchIp) {
+      routerUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
+    } else {
+      routerUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
+    }
   }
 
   return {
@@ -133,7 +148,13 @@ function updateMode(mode?: "account" | "packages") {
 }
 
 function postLoginToRouter(context: PortalContext) {
-  if (!context.routerUrl) {
+  let targetUrl = context.routerUrl;
+  if (!targetUrl && context.isAruba) {
+    const proto = window.location.protocol === "https:" ? "https:" : "http:";
+    targetUrl = `${proto}//securelogin.arubanetworks.com/swarm.cgi`;
+  }
+
+  if (!targetUrl) {
     if (context.destination && context.destination.startsWith("http")) {
       window.location.assign(context.destination);
     } else {
@@ -144,15 +165,17 @@ function postLoginToRouter(context: PortalContext) {
 
   const form = document.createElement("form");
   form.method = "post";
-  form.action = context.routerUrl;
+  form.action = targetUrl;
+  form.style.display = "none";
 
   const fields: Array<[string, string]> = context.isAruba
     ? [
+        ["cmd", "authenticate"],
         ["user", context.mac],
         ["username", context.mac],
         ["password", context.mac],
-        ["cmd", "authenticate"],
         ["url", context.destination || "http://captive.apple.com"],
+        ["authenticated", "1"],
         ["Login", "Log In"],
       ]
     : [
