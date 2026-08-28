@@ -12,11 +12,9 @@ import {
   SettingsIcon,
   ShieldCheckIcon,
   Trash2Icon,
-  UserCogIcon,
   UserPlusIcon,
   UsersIcon,
   WifiIcon,
-  XIcon,
   CheckCircleIcon,
   XCircleIcon,
   ChevronDownIcon,
@@ -142,7 +140,6 @@ type MacAuthorization = {
   connected_at: string;
   expires_at: string;
 };
-type OAuthAuthorization = { id: number; google_email: string; created_at?: string };
 type DataState = {
   stats: Stats;
   sessions: Session[];
@@ -163,10 +160,6 @@ type SettingsConfig = {
     serverIp?: string;
   };
   portalUrl?: string;
-  oauth: {
-    clientIdConfigured: boolean;
-    callbackUrl: string;
-  };
 };
 
 type TestResult = {
@@ -215,7 +208,7 @@ const viewCopy: Record<View, { title: string; description: string }> = {
   },
   accounts: {
     title: "Tài khoản",
-    description: "Tạo, khóa và cấp quyền Google OAuth cho tài khoản khách.",
+    description: "Tạo, khóa và quản lý tài khoản khách nội bộ.",
   },
   packages: {
     title: "Gói cước",
@@ -227,7 +220,7 @@ const viewCopy: Record<View, { title: string; description: string }> = {
   },
   settings: {
     title: "Cài đặt",
-    description: "Cấu hình kết nối Router và Google OAuth.",
+    description: "Cấu hình kết nối Router và RADIUS.",
   },
 };
 
@@ -410,11 +403,6 @@ function AdminApp() {
   const [createPackageDialogOpen, setCreatePackageDialogOpen] = useState(false);
   const [editingPackage, setEditingPackage] = useState<Package | null>(null);
   const [editingUser, setEditingUser] = useState<PortalUser | null>(null);
-  const [googleDialogUser, setGoogleDialogUser] = useState<PortalUser | null>(null);
-  const [googleAuthorizations, setGoogleAuthorizations] = useState<OAuthAuthorization[]>([]);
-  const [googleEmail, setGoogleEmail] = useState("");
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [isGoogleSaving, setIsGoogleSaving] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
   const [isBackingUp, setIsBackingUp] = useState(false);
 
@@ -423,8 +411,6 @@ function AdminApp() {
   const [isSettingsLoading, setIsSettingsLoading] = useState(false);
   const [radiusTestResult, setRadiusTestResult] = useState<TestResult | null>(null);
   const [isRadiusTesting, setIsRadiusTesting] = useState(false);
-  const [oauthTestResult, setOauthTestResult] = useState<TestResult | null>(null);
-  const [isOauthTesting, setIsOauthTesting] = useState(false);
   const [radiusTestInput, setRadiusTestInput] = useState({ routerIp: "", sharedSecret: "", authPort: 1812 });
 
   const loadData = useCallback(async (showRefreshState = false) => {
@@ -540,58 +526,6 @@ function AdminApp() {
     }
   }
 
-  async function openGoogleDialog(user: PortalUser) {
-    setGoogleDialogUser(user);
-    setGoogleEmail("");
-    setGoogleAuthorizations([]);
-    setIsGoogleLoading(true);
-    try {
-      setGoogleAuthorizations(await apiRequest<OAuthAuthorization[]>(`/api/users/${user.id}/whitelist`));
-    } catch (caughtError) {
-      toast.add({
-        title: "Không thể tải danh sách Google",
-        description: caughtError instanceof Error ? caughtError.message : "Vui lòng thử lại.",
-        type: "error",
-      });
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  }
-
-  async function saveGoogleAuthorization(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!googleDialogUser) return;
-    setIsGoogleSaving(true);
-    try {
-      await apiRequest<{ success: boolean }>(`/api/users/${googleDialogUser.id}/whitelist`, {
-        method: "POST",
-        body: JSON.stringify({ google_email: googleEmail }),
-      });
-      setGoogleAuthorizations(await apiRequest<OAuthAuthorization[]>(`/api/users/${googleDialogUser.id}/whitelist`));
-      setGoogleEmail("");
-      toast.add({
-        title: "Đã cấp quyền Google",
-        description: "Tài khoản có thể đăng nhập qua Google OAuth.",
-        type: "success",
-      });
-    } catch (caughtError) {
-      toast.add({
-        title: "Không thể cấp quyền Google",
-        description: caughtError instanceof Error ? caughtError.message : "Vui lòng thử lại.",
-        type: "error",
-      });
-    } finally {
-      setIsGoogleSaving(false);
-    }
-  }
-
-  async function revokeGoogleAuthorization(email: string) {
-    if (!googleDialogUser) return;
-    await apiRequest<{ success: boolean }>(`/api/users/${googleDialogUser.id}/whitelist/${encodeURIComponent(email)}`, { method: "DELETE" });
-    setGoogleAuthorizations((entries) => entries.filter((entry) => entry.google_email !== email));
-    toast.add({ title: "Đã thu hồi quyền Google", type: "success" });
-  }
-
   async function createBackup() {
     setIsBackingUp(true);
     setBackupMessage("");
@@ -630,24 +564,6 @@ function AdminApp() {
       });
     } finally {
       setIsRadiusTesting(false);
-    }
-  }
-
-  async function testOauthConnection() {
-    setIsOauthTesting(true);
-    setOauthTestResult(null);
-    try {
-      const result = await apiRequest<TestResult>("/admin/api/settings/test-oauth", {
-        method: "POST",
-      });
-      setOauthTestResult(result);
-    } catch (caughtError) {
-      setOauthTestResult({
-        success: false,
-        message: caughtError instanceof Error ? caughtError.message : "Lỗi kết nối",
-      });
-    } finally {
-      setIsOauthTesting(false);
     }
   }
 
@@ -799,7 +715,6 @@ function AdminApp() {
                 }
               }}
               onUpdate={handleUpdateUser}
-              onOpenGoogle={(user) => void openGoogleDialog(user)}
               onToggle={(user) => queueAction(
                 isActive(user.is_active) ? "Khóa tài khoản?" : "Mở khóa tài khoản?",
                 `Tài khoản ${user.identifier} sẽ ${isActive(user.is_active) ? "không" : ""} thể sử dụng để đăng nhập.`,
@@ -839,29 +754,14 @@ function AdminApp() {
               isLoading={isSettingsLoading}
               radiusTestResult={radiusTestResult}
               isRadiusTesting={isRadiusTesting}
-              oauthTestResult={oauthTestResult}
-              isOauthTesting={isOauthTesting}
               radiusTestInput={radiusTestInput}
               onRadiusTestInputChange={setRadiusTestInput}
               onTestRadius={() => void testRadiusConnection()}
-              onTestOauth={() => void testOauthConnection()}
               onRefresh={() => void loadSettings()}
             /> : null}
           </div>
         </main>
       </div>
-
-      <GoogleAuthorizationDialog
-        user={googleDialogUser}
-        entries={googleAuthorizations}
-        email={googleEmail}
-        isLoading={isGoogleLoading}
-        isSaving={isGoogleSaving}
-        onEmailChange={setGoogleEmail}
-        onOpenChange={(open) => { if (!open) setGoogleDialogUser(null); }}
-        onSubmit={saveGoogleAuthorization}
-        onRevoke={(email) => void revokeGoogleAuthorization(email)}
-      />
 
       <AlertDialog open={Boolean(pendingAction)} onOpenChange={(open) => { if (!open && !isActionRunning) setPendingAction(null); }}>
         <AlertDialogContent>
@@ -1016,7 +916,6 @@ function AccountsView({
   setEditingUser,
   onCreate,
   onUpdate,
-  onOpenGoogle,
   onToggle,
   onDelete,
 }: {
@@ -1029,7 +928,6 @@ function AccountsView({
   setEditingUser: (user: PortalUser | null) => void;
   onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onUpdate: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  onOpenGoogle: (user: PortalUser) => void;
   onToggle: (user: PortalUser) => void;
   onDelete: (user: PortalUser) => void;
 }) {
@@ -1047,7 +945,7 @@ function AccountsView({
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Tạo tài khoản nội bộ</DialogTitle>
-              <DialogDescription>Tài khoản này có thể được dùng cho đăng nhập nội bộ hoặc liên kết Google OAuth.</DialogDescription>
+              <DialogDescription>Tài khoản này được dùng để đăng nhập portal nội bộ.</DialogDescription>
             </DialogHeader>
             <form onSubmit={(event) => void onCreate(event)}>
               <FieldGroup>
@@ -1144,7 +1042,6 @@ function AccountsView({
                         <PencilIcon data-icon="inline-start" />
                         Sửa
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => onOpenGoogle(user)}>Google</Button>
                       <Button variant="outline" size="sm" onClick={() => onToggle(user)}>
                         {isActive(user.is_active) ? "Khóa" : "Mở khóa"}
                       </Button>
@@ -1403,24 +1300,18 @@ function SettingsView({
   isLoading,
   radiusTestResult,
   isRadiusTesting,
-  oauthTestResult,
-  isOauthTesting,
   radiusTestInput,
   onRadiusTestInputChange,
   onTestRadius,
-  onTestOauth,
   onRefresh,
 }: {
   config: SettingsConfig | null;
   isLoading: boolean;
   radiusTestResult: TestResult | null;
   isRadiusTesting: boolean;
-  oauthTestResult: TestResult | null;
-  isOauthTesting: boolean;
   radiusTestInput: { routerIp: string; sharedSecret: string; authPort: number };
   onRadiusTestInputChange: (input: { routerIp: string; sharedSecret: string; authPort: number }) => void;
   onTestRadius: () => void;
-  onTestOauth: () => void;
   onRefresh: () => void;
 }) {
   const [customServerIp, setCustomServerIp] = useState<string>("");
@@ -1632,85 +1523,6 @@ function SettingsView({
         </CardContent>
       </Card>
 
-      {/* Google OAuth */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <CardTitle>Google OAuth</CardTitle>
-            {config?.oauth.clientIdConfigured ? (
-              <Badge variant="secondary" className="gap-1">
-                <CheckCircleIcon className="size-3" />Đã cấu hình
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="gap-1 text-yellow-600">
-                <XCircleIcon className="size-3" />Chưa cấu hình
-              </Badge>
-            )}
-          </div>
-          <CardDescription>Xác thực đăng nhập qua tài khoản Google</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Callback URL</span>
-            <code className="rounded bg-muted p-2 text-sm break-all">
-              {config?.oauth.callbackUrl || "Chưa cấu hình"}
-            </code>
-            <FieldDescription>URL này cần được đăng ký trong Google Cloud Console</FieldDescription>
-          </div>
-
-          <CollapsibleCard title="Hướng dẫn cấu hình Google OAuth" defaultOpen={false}>
-            <div className="space-y-4 text-sm">
-              <div>
-                <h4 className="font-semibold">Bước 1: Tạo OAuth Client</h4>
-                <ol className="list-inside list-decimal space-y-1 text-muted-foreground">
-                  <li>Truy cập <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Google Cloud Console</a></li>
-                  <li>Tạo OAuth 2.0 Client ID mới</li>
-                  <li>Application type: Web application</li>
-                  <li>Thêm Authorized redirect URI: <code className="bg-muted px-1 rounded">{config?.oauth.callbackUrl || "http://localhost:3000/auth/google/callback"}</code></li>
-                </ol>
-              </div>
-              <div>
-                <h4 className="font-semibold">Bước 2: Lấy credentials</h4>
-                <ol className="list-inside list-decimal space-y-1 text-muted-foreground">
-                  <li>Sau khi tạo, bạn sẽ nhận được Client ID và Client Secret</li>
-                  <li>Thêm vào file <code className="bg-muted px-1 rounded">.env</code></li>
-                </ol>
-              </div>
-              <div>
-                <h4 className="font-semibold">Bước 3: Cấu hình .env</h4>
-                <div className="rounded-lg bg-muted p-3 text-xs font-mono">
-                  <div>GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com</div>
-                  <div>GOOGLE_CLIENT_SECRET=your-client-secret</div>
-                  <div>GOOGLE_CALLBACK_URL={config?.oauth.callbackUrl || "http://localhost:3000/auth/google/callback"}</div>
-                </div>
-              </div>
-              <div>
-                <h4 className="font-semibold">Bước 4: Khởi động lại server</h4>
-                <p className="text-muted-foreground">Sau khi cập nhật .env, cần khởi động lại server để áp dụng.</p>
-              </div>
-              <div className="rounded-lg bg-yellow-50 p-3 text-yellow-800 text-xs">
-                <strong>Lưu ý:</strong> Chỉ email được cấp quyền trong trang "Tài khoản" mới có thể đăng nhập qua Google OAuth.
-              </div>
-            </div>
-          </CollapsibleCard>
-
-          <div className="border-t pt-4">
-            <Button onClick={onTestOauth} disabled={isOauthTesting}>
-              {isOauthTesting ? <Spinner data-icon="inline-start" /> : <CheckCircleIcon data-icon="inline-start" />}
-              {isOauthTesting ? "Đang kiểm tra..." : "Kiểm tra cấu hình OAuth"}
-            </Button>
-            {oauthTestResult && (
-              <Alert className={`mt-3 ${oauthTestResult.success ? "border-green-500 bg-green-50" : "border-red-500 bg-red-50"}`}>
-                {oauthTestResult.success ? <CheckCircleIcon className="size-4 text-green-600" /> : <XCircleIcon className="size-4 text-red-600" />}
-                <AlertDescription className={oauthTestResult.success ? "text-green-800" : "text-red-800"}>
-                  {oauthTestResult.message}
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
       <Card>
         <CardHeader>
           <CardTitle>Cài đặt hiện tại</CardTitle>
@@ -1725,10 +1537,6 @@ function SettingsView({
       </Card>
     </div>
   );
-}
-
-function GoogleAuthorizationDialog({ user, entries, email, isLoading, isSaving, onEmailChange, onOpenChange, onSubmit, onRevoke }: { user: PortalUser | null; entries: OAuthAuthorization[]; email: string; isLoading: boolean; isSaving: boolean; onEmailChange: (email: string) => void; onOpenChange: (open: boolean) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>; onRevoke: (email: string) => void }) {
-  return <Dialog open={Boolean(user)} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Quyền đăng nhập Google</DialogTitle><DialogDescription>{user ? `Chỉ các email dưới đây được dùng Google OAuth cho ${user.identifier}.` : ""}</DialogDescription></DialogHeader><form onSubmit={(event) => void onSubmit(event)}><FieldGroup><Field><FieldLabel htmlFor="google-email">Email Google</FieldLabel><Input id="google-email" type="email" value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="name@gmail.com" required /><FieldDescription>Email này sẽ được đối chiếu sau khi Google xác thực.</FieldDescription></Field><Button type="submit" disabled={isSaving}>{isSaving ? <Spinner data-icon="inline-start" /> : <UserCogIcon data-icon="inline-start" />}Cấp quyền Google</Button></FieldGroup></form><Separator /><div className="flex flex-col gap-3"><p className="text-sm font-medium">Email đã được cấp quyền</p>{isLoading ? <Skeleton className="h-8 w-full" /> : null}{!isLoading && !entries.length ? <p className="text-sm text-muted-foreground">Chưa có email nào.</p> : null}{entries.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 rounded-lg border p-2"><Badge variant="secondary">{entry.google_email}</Badge><Button variant="ghost" size="icon-sm" aria-label={`Thu hồi ${entry.google_email}`} onClick={() => onRevoke(entry.google_email)}><XIcon /></Button></div>)}</div><DialogFooter><DialogClose render={<Button variant="outline" />}>Đóng</DialogClose></DialogFooter></DialogContent></Dialog>;
 }
 
 export default AdminApp;

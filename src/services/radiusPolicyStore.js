@@ -69,12 +69,32 @@ async function upsertAuthorization(entry) {
 }
 
 async function removeAuthorization(macAddress) {
+  const connection = await getPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM radcheck WHERE username = ?', [macAddress]);
+    await connection.execute('DELETE FROM radreply WHERE username = ?', [macAddress]);
+    await connection.execute('DELETE FROM radius_authorizations WHERE mac_address = ?', [macAddress]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function getRecentAccounting() {
   const db = getPool();
-  await Promise.all([
-    db.execute('DELETE FROM radcheck WHERE username = ?', [macAddress]),
-    db.execute('DELETE FROM radreply WHERE username = ?', [macAddress]),
-    db.execute('DELETE FROM radius_authorizations WHERE mac_address = ?', [macAddress]),
-  ]);
+  const [rows] = await db.execute(`
+    SELECT acctsessionid, username, nasipaddress, callingstationid,
+      acctstarttime, acctstoptime, acctsessiontime, acctinputoctets, acctoutputoctets
+    FROM radacct
+    WHERE acctstoptime IS NULL
+       OR acctstoptime >= UTC_TIMESTAMP() - INTERVAL 2 DAY
+    ORDER BY acctstarttime DESC
+  `);
+  return rows;
 }
 
 async function close() {
@@ -82,4 +102,4 @@ async function close() {
   pool = undefined;
 }
 
-module.exports = { upsertAuthorization, removeAuthorization, close };
+module.exports = { upsertAuthorization, removeAuthorization, getRecentAccounting, close };

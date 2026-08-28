@@ -26,7 +26,6 @@ import {
   FieldError,
   FieldGroup,
   FieldLabel,
-  FieldSeparator,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -177,20 +176,33 @@ function postLoginToRouter(context: PortalContext) {
   // Keep the RADIUS identity stable across router formats. The backend stores
   // and authorizes this canonical MAC value in FreeRADIUS' SQL policy store.
   const radiusIdentity = context.mac.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
+  let destination = context.destination;
+  try {
+    const loginHost = context.routerUrl ? new URL(context.routerUrl).host : "";
+    const destinationUrl = destination ? new URL(destination) : null;
+    // When a client opens the HotSpot login URL directly, RouterOS reports that
+    // same local URL as `link-orig`. Sending it back after Access-Accept lands
+    // on the router's root page (404), not the user's intended destination.
+    if (!destinationUrl || destinationUrl.host === loginHost) {
+      destination = new URL("/success.html", window.location.origin).toString();
+    }
+  } catch {
+    destination = new URL("/success.html", window.location.origin).toString();
+  }
   const fields: Array<[string, string]> = context.isAruba
     ? [
         ["cmd", "authenticate"],
         ["user", radiusIdentity],
         ["username", radiusIdentity],
         ["password", radiusIdentity],
-        ["url", context.destination || "http://captive.apple.com"],
+        ["url", destination || "http://captive.apple.com"],
         ["authenticated", "1"],
         ["Login", "Log In"],
       ]
     : [
         ["username", radiusIdentity],
         ["password", radiusIdentity],
-        ["dst", context.destination],
+        ["dst", destination],
       ];
 
   fields.forEach(([name, value]) => {
@@ -309,15 +321,6 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
     }
   }
 
-  function continueWithGoogle() {
-    const params = new URLSearchParams();
-    if (context.mac) params.set("mac", context.mac);
-    if (context.routerUrl) params.set("router_url", context.routerUrl);
-    if (context.destination) params.set("dst", context.destination);
-
-    window.location.assign(`/auth/google?${params.toString()}`);
-  }
-
   return (
     <Card className="w-full min-w-0">
       <CardHeader>
@@ -330,23 +333,13 @@ function AccountLogin({ context, onBack }: { context: PortalContext; onBack: () 
         </div>
         <CardTitle className="mt-4 text-2xl tracking-tight">Đăng nhập nội bộ</CardTitle>
         <CardDescription>
-          Dùng tài khoản nội bộ hoặc Google đã được quản trị viên cấp quyền.
+          Dùng tài khoản và mật khẩu do quản trị viên cấp.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <NoticeAlert notice={notice} />
-        <Button
-          variant="outline"
-          size="lg"
-          className="h-11 w-full"
-          disabled={isSubmitting}
-          onClick={continueWithGoogle}
-        >
-          Đăng nhập với Google
-        </Button>
         <form onSubmit={submitLocalLogin} noValidate>
           <FieldGroup>
-            <FieldSeparator>hoặc dùng tài khoản nội bộ</FieldSeparator>
             <Field data-invalid={Boolean(notice)}>
               <FieldLabel htmlFor="username">Tài khoản</FieldLabel>
               <Input id="username" name="username" autoComplete="username" required />
@@ -706,10 +699,6 @@ function SuccessScreen() {
 function ErrorScreen() {
   const error = new URLSearchParams(window.location.search).get("error");
   const messages: Record<string, string> = {
-    invalid_oauth_state: "Phiên đăng nhập Google đã hết hạn. Hãy bắt đầu lại từ portal.",
-    oauth_failed: "Google chưa thể xác thực tài khoản. Vui lòng thử lại.",
-    oauth_not_configured: "Đăng nhập Google chưa được cấu hình trên máy chủ.",
-    unauthorized: "Tài khoản Google này chưa được cấp quyền truy cập WiFi.",
   };
 
   return (

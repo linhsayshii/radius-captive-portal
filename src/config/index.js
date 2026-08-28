@@ -18,10 +18,6 @@ function loadConfig() {
     databasePath: process.env.DATABASE_PATH || './data/wifi-portal.db',
     sessionSecret: process.env.ADMIN_SESSION_SECRET || 'dev-secret-change-in-production',
     logLevel: process.env.LOG_LEVEL || 'info',
-    // Google OAuth (for later)
-    googleClientId: process.env.GOOGLE_CLIENT_ID || '',
-    googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    googleCallbackUrl: process.env.GOOGLE_CALLBACK_URL || '',
     // RADIUS
     radiusSharedSecret: process.env.RADIUS_SHARED_SECRET || 'changeme',
     radiusAuthPort: parseInt(process.env.RADIUS_AUTH_PORT || '1812', 10),

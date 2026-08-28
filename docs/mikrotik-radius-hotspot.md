@@ -51,7 +51,7 @@ là bắt buộc để URL không vỡ khi giá trị chứa ký tự đặc bi�
   <form id="portal" method="get" action="https://PORTAL_URL/">
     <input type="hidden" name="mac" value="$(mac-esc)">
     <input type="hidden" name="link-login-only" value="$(link-login-only-esc)">
-    <input type="hidden" name="dst" value="$(link-orig-esc)">
+    <input type="hidden" name="dst" value="https://captiveportal.hnglinh.io.vn/success.html">
   </form>
   <script>document.getElementById('portal').submit()</script>
 </body></html>
@@ -61,13 +61,10 @@ Sau khi chọn gói, portal gửi form POST về `link-login-only` với usernam
 password là MAC chuẩn hoá. MikroTik gửi Access-Request PAP tới FreeRADIUS và
 chỉ mở Internet khi nhận Access-Accept.
 
-## 4. Walled garden khi dùng HTTPS/OAuth
+## 4. Walled garden cho portal HTTPS
 
 ```routeros
 /ip hotspot walled-garden add dst-host=wifi.example.com action=allow
-/ip hotspot walled-garden add dst-host=accounts.google.com action=allow
-/ip hotspot walled-garden add dst-host=*.gstatic.com action=allow
-/ip hotspot walled-garden add dst-host=*.googleapis.com action=allow
 ```
 
 Nên dùng FQDN có chứng chỉ TLS hợp lệ cho portal. Mở firewall trên **server**

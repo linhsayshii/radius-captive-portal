@@ -54,6 +54,20 @@ try {
   db.exec(`ALTER TABLE mac_authorizations ADD COLUMN max_devices INTEGER;`);
 } catch (_) {}
 
+// Durable synchronization queue for the separate FreeRADIUS policy database.
+// SQLite remains the source of truth; every desired RADIUS change is retried
+// until it has been materialized in MariaDB.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS radius_sync_outbox (
+    mac_address TEXT PRIMARY KEY,
+    operation TEXT NOT NULL CHECK(operation IN ('upsert', 'delete')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_radius_sync_outbox_updated ON radius_sync_outbox(updated_at);
+`);
+
 // User queries
 const userQueries = {
   getById: db.prepare('SELECT u.*, p.name as package_name FROM users u LEFT JOIN packages p ON u.package_id = p.id WHERE u.id = ?'),
@@ -64,6 +78,7 @@ const userQueries = {
     FROM users u LEFT JOIN packages p ON u.package_id = p.id
     ORDER BY u.created_at DESC
   `),
+  countByPackage: db.prepare('SELECT COUNT(*) AS count FROM users WHERE package_id = ?'),
   create: db.prepare(`
     INSERT INTO users (type, identifier, email, password_hash, display_name, max_devices, package_id)
     VALUES (@type, @identifier, @email, @password_hash, @display_name, @max_devices, @package_id)
@@ -207,9 +222,26 @@ const macAuthorizationQueries = {
       max_devices = excluded.max_devices
   `),
   get: db.prepare('SELECT * FROM mac_authorizations WHERE mac_address = ?'),
+  getByUser: db.prepare('SELECT * FROM mac_authorizations WHERE user_id = ?'),
+  getByPackage: db.prepare('SELECT * FROM mac_authorizations WHERE package_id = ?'),
+  getExpired: db.prepare("SELECT * FROM mac_authorizations WHERE julianday(expires_at) <= julianday('now')"),
   getAll: db.prepare('SELECT * FROM mac_authorizations ORDER BY expires_at DESC'),
   delete: db.prepare('DELETE FROM mac_authorizations WHERE mac_address = ?'),
   deleteExpired: db.prepare("DELETE FROM mac_authorizations WHERE julianday(expires_at) <= julianday('now')"),
+};
+
+const radiusSyncOutboxQueries = {
+  enqueue: db.prepare(`
+    INSERT INTO radius_sync_outbox (mac_address, operation, attempts, last_error, updated_at)
+    VALUES (?, ?, 0, NULL, CURRENT_TIMESTAMP)
+    ON CONFLICT(mac_address) DO UPDATE SET
+      operation = excluded.operation, attempts = 0, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+  `),
+  get: db.prepare('SELECT * FROM radius_sync_outbox WHERE mac_address = ?'),
+  getPending: db.prepare('SELECT * FROM radius_sync_outbox ORDER BY updated_at ASC LIMIT ?'),
+  complete: db.prepare('DELETE FROM radius_sync_outbox WHERE mac_address = ?'),
+  fail: db.prepare(`UPDATE radius_sync_outbox
+    SET attempts = attempts + 1, last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE mac_address = ?`),
 };
 
 // Export everything
@@ -224,4 +256,5 @@ module.exports = {
   settings: settingQueries,
   logs: logQueries,
   macAuthorizations: macAuthorizationQueries,
+  radiusSyncOutbox: radiusSyncOutboxQueries,
 };

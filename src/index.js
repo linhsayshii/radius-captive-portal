@@ -1,6 +1,9 @@
 const app = require('./app');
 const { loadConfig } = require('./config');
 const logger = require('./utils/logger');
+const { startRadiusSyncWorker, stopRadiusSyncWorker } = require('./services/radiusSync');
+const { startRadiusAccountingSync, stopRadiusAccountingSync } = require('./services/radiusAccountingSync');
+const { startIdleChecker, stopIdleChecker } = require('./services/sessionManager');
 
 const config = loadConfig();
 
@@ -50,9 +53,15 @@ async function bootstrap() {
   }
 
   const httpServer = await startHttpServer();
+  startRadiusSyncWorker();
+  startRadiusAccountingSync();
+  startIdleChecker();
 
   const shutdown = (signal) => {
     logger.info(`Received ${signal}; shutting down WiFi Portal`);
+    stopRadiusSyncWorker();
+    stopRadiusAccountingSync();
+    stopIdleChecker();
     httpServer.close(() => process.exit(0));
   };
   process.once('SIGINT', () => shutdown('SIGINT'));

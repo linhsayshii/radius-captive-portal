@@ -1,6 +1,6 @@
 # WiFi Captive Portal & FreeRADIUS
 
-Hệ thống quản lý mạng WiFi tập trung tích hợp **Captive Portal**, **FreeRADIUS**, MariaDB, Google OAuth 2.0 và Admin Dashboard. Giao diện portal, gói cước, giới hạn thời lượng, tốc độ upload/download, quota và số thiết bị được giữ lại; RADIUS UDP không còn do Node.js tự xử lý.
+Hệ thống quản lý mạng WiFi tập trung tích hợp **Captive Portal**, **FreeRADIUS**, MariaDB và Admin Dashboard. Người dùng đăng nhập hoàn toàn bằng tài khoản nội bộ do quản trị viên cấp. Giao diện portal, gói cước, giới hạn thời lượng, tốc độ upload/download, quota và số thiết bị được giữ lại; RADIUS UDP không còn do Node.js tự xử lý.
 
 Hỗ trợ đa nền tảng phần cứng mạng: **MikroTik RouterOS**, **Aruba Instant AP (IAP / Virtual Controller)**, **OpenWrt (CoovaChilli / OpenNDS)**, **Ubiquiti UniFi**, **pfSense / OPNsense**, **Cisco Meraki**.
 
@@ -93,30 +93,9 @@ http://IP_SERVER:3000/?mac=$(mac)&link-login-only=$(link-login-only)&dst=$(link-
 
 ---
 
-## 🔐 Google OAuth 2.0
+## 🔐 Đăng nhập nội bộ
 
-Để cho phép người dùng đăng nhập bằng tài khoản Google, tạo một OAuth 2.0 Web Client trên [Google Cloud Console](https://console.cloud.google.com/apis/credentials) và cấu hình trong `.env`:
-
-```env
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
-GOOGLE_CALLBACK_URL=https://wifi.yourdomain.com/auth/google/callback
-```
-
-### 🌐 Danh sách tên miền cần Walled Garden (Whitelist trên Router)
-
-Khi người dùng chưa đăng nhập, Router cần mở thông các tên miền sau để giao diện Google Sign-in hoạt động bình thường:
-
-| Tên miền | Mục đích |
-| :--- | :--- |
-| `wifi.yourdomain.com` (hoặc IP Server) | Giao diện Captive Portal & Callback URL |
-| `accounts.google.com` | Trang đăng nhập tài khoản Google |
-| `accounts.youtube.com` | Phiên SSO / Identity của Google |
-| `ssl.gstatic.com`, `fonts.gstatic.com` | Static CDN tài nguyên & Font giao diện |
-| `fonts.googleapis.com` | Google Fonts |
-| `apis.google.com`, `play.google.com` | Thư viện OAuth Client SDK |
-| `*.google.com`, `*.gstatic.com`, `*.googleapis.com` | Wildcard toàn bộ dịch vụ phụ trợ Google OAuth |
-
+Tạo tài khoản trong Admin Dashboard, gán gói cước và cấp tên đăng nhập/mật khẩu cho khách. Không cần cấu hình nhà cung cấp đăng nhập bên thứ ba hoặc mở thêm các miền đó trong Walled Garden.
 
 ---
 

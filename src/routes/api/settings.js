@@ -40,10 +40,6 @@ router.get('/', (req, res) => {
       serverIp: detectedLanIp,
     },
     portalUrl,
-    oauth: {
-      clientIdConfigured: Boolean(config.googleClientId),
-      callbackUrl: config.googleCallbackUrl,
-    },
   });
 });
 
@@ -199,57 +195,6 @@ router.post('/test-radius', async (req, res) => {
       message: `Máy chủ RADIUS chưa phản hồi trên cổng UDP ${targetAuthPort}. Hãy kiểm tra xem server đã khởi động cổng RADIUS chưa.`,
     });
   }
-});
-
-/**
- * POST /admin/api/settings/test-oauth
- * Test OAuth configuration by checking if credentials are set
- */
-router.post('/test-oauth', async (_req, res) => {
-  const config = loadConfig();
-
-  if (!config.googleClientId || !config.googleClientSecret) {
-    return res.json({
-      success: false,
-      configured: false,
-      message: 'Google OAuth chưa được cấu hình. Vui lòng thiết lập GOOGLE_CLIENT_ID và GOOGLE_CLIENT_SECRET trong .env',
-    });
-  }
-
-  if (!config.googleCallbackUrl) {
-    return res.json({
-      success: false,
-      configured: false,
-      message: 'Google OAuth callback URL chưa được cấu hình',
-    });
-  }
-
-  // Validate URL format
-  try {
-    new URL(config.googleCallbackUrl);
-  } catch {
-    return res.json({
-      success: false,
-      configured: true,
-      message: 'GOOGLE_CALLBACK_URL không hợp lệ',
-    });
-  }
-
-  // Check if client ID looks valid (basic format check)
-  if (!config.googleClientId.includes('.apps.googleusercontent.com')) {
-    return res.json({
-      success: false,
-      configured: true,
-      message: 'GOOGLE_CLIENT_ID có thể không đúng định dạng (nên kết thúc bằng .apps.googleusercontent.com)',
-    });
-  }
-
-  res.json({
-    success: true,
-    configured: true,
-    message: 'Google OAuth đã được cấu hình đúng. Callback URL: ' + config.googleCallbackUrl,
-    callbackUrl: config.googleCallbackUrl,
-  });
 });
 
 module.exports = router;

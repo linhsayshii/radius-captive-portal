@@ -85,18 +85,10 @@ Hướng dẫn tích hợp mạng WiFi Khách trên **Aruba Instant AP (Virtual 
     - **Service**: `tcp` -> Port: `3000` (hoặc port web portal)
     - **Action**: `Allow` (Permit)
     - **Destination**: `to a specific IP host` -> Nhập IP máy chủ Portal (`192.168.1.50`).
-  - **Walled Garden Domain Whitelist (Nếu dùng Google OAuth)**:
+  - **Walled Garden Domain Whitelist**:
     - Vào phần **Walled Garden** trong cấu hình mạng / role.
     - Thêm danh sách tên miền cần mở trước xác thực:
       - `portal.example.com`
-      - `accounts.google.com`
-      - `accounts.youtube.com`
-      - `ssl.gstatic.com`
-      - `fonts.gstatic.com`
-      - `fonts.googleapis.com`
-      - `apis.google.com`
-      - `play.google.com`
-      - `*.google.com`, `*.gstatic.com`, `*.googleapis.com`
 - Bấm **Finish** để hoàn tất.
 
 ---
@@ -129,12 +121,9 @@ wlan access-rule Portal-Pre-Auth
   rule any any match udp 53 53 permit
   rule any any match udp 67 68 permit
 
-# 4. Cấu hình Walled Garden Domain Whitelist cho Google OAuth
+# 4. Cấu hình Walled Garden Domain Whitelist cho Portal
 wlan walled-garden
   white-list "portal.example.com"
-  white-list "*.google.com"
-  white-list "*.gstatic.com"
-  white-list "*.googleapis.com"
 
 # 5. Khởi tạo SSID Guest Network
 wlan ssid-profile "WiFi-Khach-Hang"

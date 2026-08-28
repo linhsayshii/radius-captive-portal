@@ -115,10 +115,9 @@ router.post('/connect', async (req, res) => {
     }, durationMs);
 
     try {
-      await require('../../services/radiusPolicyStore').upsertAuthorization(entry);
+      await require('../../services/radiusSync').synchronizeMac(macAddress);
     } catch (error) {
       logger.error('Unable to synchronize guest policy to FreeRADIUS', error);
-      revokeMac(macAddress);
       return res.status(503).json({ error: 'Máy chủ RADIUS chưa sẵn sàng. Vui lòng thử lại.' });
     }
 
@@ -208,7 +207,7 @@ router.delete('/whitelist/:mac', requireApiAuth, async (req, res) => {
   macWhitelist.delete(mac);
   macAuthorizations.delete.run(mac);
   try {
-    await require('../../services/radiusPolicyStore').removeAuthorization(mac);
+    await require('../../services/radiusSync').removeMacFromRadius(mac);
   } catch (error) {
     logger.error('Unable to revoke FreeRADIUS policy', error);
     return res.status(503).json({ error: 'Không thể đồng bộ thu hồi quyền với RADIUS.' });
@@ -256,6 +255,7 @@ function getAuthorizedMac(mac) {
   if (new Date(entry.expires_at) <= new Date()) {
     macWhitelist.delete(normalized);
     macAuthorizations.delete.run(normalized);
+    require('../../services/radiusSync').queueDelete(normalized);
     return null;
   }
   return entry;

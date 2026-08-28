@@ -94,7 +94,8 @@ async function checkIdleSessions() {
 
     // Remove stale authorizations only after active sessions have had a chance
     // to observe the expiry and issue a Disconnect-Request to their NAS.
-    macAuthorizations.deleteExpired.run();
+    const { queueExpiredAuthorizationRemoval } = require('./radiusSync');
+    queueExpiredAuthorizationRemoval();
     try {
       const { macWhitelist } = require('../routes/api/guest');
       for (const [mac, data] of macWhitelist.entries()) {
@@ -252,7 +253,7 @@ function updateSessionActivity(sessionId, inputOctets, outputOctets) {
     // User is idle - increment idle counter
     sessions.update.run({
       ...session,
-      idle_seconds: (session.idle_seconds || 0) + 60,
+      idle_seconds: (session.idle_seconds || 0) + 30,
     });
   }
 }

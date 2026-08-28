@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { packages } = require('../../db');
+const { packages, users } = require('../../db');
 const { requireApiAuth } = require('../../middleware/auth');
+const { applyPackageSnapshot, revokePackageAuthorizations, flushRadiusOutbox, disconnectActiveAuthorizations } = require('../../services/radiusSync');
 
 // List all packages (public)
 router.get('/', (req, res) => {
@@ -56,7 +57,7 @@ router.post('/', (req, res) => {
 });
 
 // Update package
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const pkg = packages.getById.get(req.params.id);
     if (!pkg) {
@@ -77,17 +78,39 @@ router.put('/:id', (req, res) => {
       is_active: is_active !== undefined ? (is_active ? 1 : 0) : pkg.is_active,
     });
 
-    res.json({ message: 'Package updated' });
+    const updatedPackage = packages.getById.get(req.params.id);
+    const affectedMacs = updatedPackage.is_active
+      ? applyPackageSnapshot(updatedPackage.id, updatedPackage)
+      : revokePackageAuthorizations(updatedPackage.id);
+    const sync = await flushRadiusOutbox();
+    void disconnectActiveAuthorizations(affectedMacs).catch(() => {});
+    if (!updatedPackage.is_active && affectedMacs.length) {
+      const { macWhitelist } = require('./guest');
+      for (const macAddress of affectedMacs) macWhitelist.delete(macAddress);
+    }
+
+    res.json({ message: 'Package updated', affected_authorizations: affectedMacs.length, radius_sync: sync });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update package' });
   }
 });
 
 // Delete package
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
+    const assignedUsers = users.countByPackage.get(req.params.id).count;
+    if (assignedUsers) {
+      return res.status(409).json({ error: 'Không thể xóa gói đang được gán cho người dùng.', assigned_users: assignedUsers });
+    }
+    const affectedMacs = revokePackageAuthorizations(req.params.id);
     packages.delete.run(req.params.id);
-    res.json({ message: 'Package deleted' });
+    const sync = await flushRadiusOutbox();
+    void disconnectActiveAuthorizations(affectedMacs).catch(() => {});
+    if (affectedMacs.length) {
+      const { macWhitelist } = require('./guest');
+      for (const macAddress of affectedMacs) macWhitelist.delete(macAddress);
+    }
+    res.json({ message: 'Package deleted', affected_authorizations: affectedMacs.length, radius_sync: sync });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete package' });
   }

@@ -3,7 +3,6 @@ const session = require('express-session');
 const helmet = require('helmet');
 const path = require('path');
 const { loadConfig } = require('./config');
-const { passport } = require('./routes/oauth');
 const SQLiteSessionStore = require('./services/sqliteSessionStore');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
@@ -42,10 +41,6 @@ const sessionConfig = {
 
 app.use(session(sessionConfig));
 
-// Passport initialization
-app.use(passport.initialize());
-app.use(passport.session());
-
 // Static files (served BEFORE rate limiters so assets and fonts are never throttled)
 app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
 app.use('/', express.static(path.join(__dirname, '../public/captive-portal')));
@@ -68,7 +63,6 @@ app.use('/api', apiLimiter);
 // Routes
 app.use('/', require('./routes'));
 app.use('/auth', require('./routes/auth'));
-app.use('/auth', require('./routes/oauth').router);
 app.use('/admin', require('./routes/auth')); // Admin auth routes
 app.use('/admin/api', require('./routes/admin'));
 app.use('/admin/api', require('./routes/admin/stats'));
