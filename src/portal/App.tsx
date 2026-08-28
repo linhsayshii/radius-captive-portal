@@ -367,6 +367,21 @@ function PortalLogin() {
 
       const activeMac = payload.mac_address || context.mac;
       postLoginToRouter({ ...context, mac: activeMac });
+      // A successful API response only authorises the MAC in the portal. The
+      // browser must still complete the hand-off to the NAS. Normally the form
+      // submission navigates away and this timer is discarded with the page.
+      // If the NAS is unreachable or rejects RADIUS, let the guest retry rather
+      // than leaving the button permanently in its loading state.
+      window.setTimeout(() => {
+        setNotice({
+          title: "Aruba chưa hoàn tất xác thực",
+          message: context.routerUrl
+            ? "Máy chủ đã cấp quyền MAC nhưng Aruba chưa phản hồi. Kiểm tra RADIUS và thử lại."
+            : "Máy chủ đã cấp quyền MAC nhưng URL captive portal thiếu switchip. Trên Aruba, đặt URL là /?mac=%m&switchip=%s&url=%u.",
+          variant: "destructive",
+        });
+        setIsConnecting(false);
+      }, 8000);
     } catch (error) {
       setNotice({
         title: "Kết nối chưa thành công",

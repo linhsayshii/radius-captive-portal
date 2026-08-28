@@ -24,7 +24,7 @@ Hướng dẫn tích hợp mạng WiFi Khách trên **Aruba Instant AP (Virtual 
 2. **Captive portal profile**: Bấm dấu **`+`** (Thêm mới):
    - **Type**: `RADIUS Authentication`
    - **IP or Hostname**: Địa chỉ IP máy chủ Portal (ví dụ: `192.168.1.50`)
-   - **URL**: `/?mac=%m&switchip=%s&url=%u` (hoặc `/?mac=%m`)
+   - **URL**: `/?mac=%m&switchip=%s&url=%u` *(bắt buộc giữ `switchip`; chỉ dùng `/?mac=%m` thì portal không thể gửi lệnh xác thực về Aruba)*
    - **Port**: `3000` (hoặc cổng HTTP/HTTPS web portal của bạn)
    - **Protocol**: `HTTP`
    - **Redirect URL**: Để trống.
@@ -111,4 +111,3 @@ wlan ssid-profile "WiFi-Khach-Hang"
   rf-band all
   set-role-pre-auth Portal-Pre-Auth
 ```
-
